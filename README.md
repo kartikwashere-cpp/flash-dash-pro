@@ -8,6 +8,10 @@
 ![License](https://img.shields.io/badge/License-MIT-lightgrey?style=flat-square)
 
 ---
+## Changelog
+- Added Sticky notes
+- Added Drag and Drop feature, you can now drag and drop images to the tab.
+---
 
 ## Features
 
@@ -126,13 +130,6 @@ Then open a new tab — the welcome overlay will appear again.
 | Firefox | ❌ Manifest V3 not yet supported |
 | Safari | ❌ Not supported |
 
----
-
-## License
-
-MIT — feel free to fork, modify, and make it your own.
-
----
 
 ## Privacy
 
