@@ -155,6 +155,213 @@ body {
   color: var(--bg);
 }
 
+/* ---------- board drag & drop overlay ---------- */
+.board.drag-active {
+  outline: 2px dashed var(--text-dim);
+  outline-offset: -14px;
+  background: var(--glass);
+  border-radius: 24px;
+  transition: background .15s ease;
+}
+
+.board.drag-active::after {
+  content: '⬇  Drop images to add them to the board';
+  position: fixed;
+  top: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--glass-strong);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 18px;
+  border-radius: 14px;
+  z-index: 50;
+  pointer-events: none;
+  animation: drop-hint-in .2s ease;
+}
+
+@keyframes drop-hint-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ---------- Sticky Notes ---------- */
+.note {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  cursor: grab;
+  touch-action: none;
+  box-shadow: 0 14px 34px -12px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  transition: box-shadow .2s ease, border-color .2s ease;
+  overflow: hidden;
+}
+
+.note:active {
+  cursor: grabbing;
+}
+
+/* Flat, single-tone palette — dark theme uses deep muted tints,
+   light theme uses soft pastels, matching the reference card style. */
+.note-yellow { background: #4a4322; border-color: rgba(255, 230, 140, 0.18); }
+.note-pink   { background: #4a2638; border-color: rgba(255, 170, 210, 0.18); }
+.note-mint   { background: #1f3d2e; border-color: rgba(150, 230, 190, 0.18); }
+.note-sky    { background: #1c3548; border-color: rgba(150, 210, 245, 0.18); }
+.note-lilac  { background: #34244a; border-color: rgba(210, 175, 245, 0.18); }
+
+[data-theme="light"] .note-yellow { background: #fdf3c4; border-color: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .note-pink   { background: #fbdce9; border-color: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .note-mint   { background: #d8f2e3; border-color: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .note-sky    { background: #d7eafb; border-color: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .note-lilac  { background: #ebdef9; border-color: rgba(0, 0, 0, 0.08); }
+
+/* Header row: accent dot (left) + close button (right) */
+.note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px 0 12px;
+  flex-shrink: 0;
+}
+
+.note-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background: var(--note-accent, #c99a2e);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+  transition: transform .12s ease;
+}
+
+.note-dot:hover {
+  transform: scale(1.2);
+}
+
+.note-yellow .note-dot { background: #c99a2e; }
+.note-pink   .note-dot { background: #d9669b; }
+.note-mint   .note-dot { background: #4caf7d; }
+.note-sky    .note-dot { background: #4f9fd6; }
+.note-lilac  .note-dot { background: #9b6fd9; }
+
+.note-close {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.45);
+  opacity: 0;
+  transition: opacity .15s, background .15s, color .15s;
+}
+
+[data-theme="light"] .note-close {
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.note:hover .note-close {
+  opacity: 1;
+}
+
+.note-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+[data-theme="light"] .note-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: #000;
+}
+
+.note-text {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 500;
+  padding: 8px 12px 14px;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: text;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+[data-theme="light"] .note-text {
+  color: rgba(20, 20, 20, 0.82);
+}
+
+.note-text::-webkit-scrollbar {
+  width: 5px;
+}
+
+.note-text::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+[data-theme="light"] .note-text::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.note-text:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+}
+
+[data-theme="light"] .note-text:empty::before {
+  color: rgba(20, 20, 20, 0.4);
+}
+
+/* Resize handle — was previously missing positioning/visibility rules
+   for notes (it only worked for .photo), which made it unusable. */
+.note-resize {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity .15s;
+}
+
+.note:hover .note-resize {
+  opacity: 0.6;
+}
+
+.note-resize::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid rgba(255, 255, 255, 0.7);
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.7);
+}
+
+[data-theme="light"] .note-resize::after {
+  border-right-color: rgba(0, 0, 0, 0.55);
+  border-bottom-color: rgba(0, 0, 0, 0.55);
+}
+
 /* ---------- vertical toolbar (left) ---------- */
 .vertical-toolbar {
   position: fixed;
@@ -1137,7 +1344,7 @@ body.focus-mode .stage {
   max-width: 480px;
 }
 
-/* Feature grid: 3 cols × 2 rows */
+/* Feature grid: 3 cols × 3 rows */
 .feature-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
