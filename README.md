@@ -27,14 +27,12 @@
 
 > No build step required — Flash Dash is pure HTML, CSS, and JavaScript.
 
-### 1. Download or clone the repo
-
-```bash
-git clone https://github.com/your-username/flash-dash.git
-# or download and unzip the release ZIP
+### 1. Download the file
+```
+# download and unzip the release ZIP
 ```
 
-### 2. Open Chrome Extensions
+### 2. Open Chrome/brave Extensions
 
 Navigate to `chrome://extensions` in your browser.
 
