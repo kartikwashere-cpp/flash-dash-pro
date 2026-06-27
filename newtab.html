@@ -75,9 +75,9 @@
         </div>
 
         <div class="feature-card">
-          <span class="feature-icon">📌</span>
-          <span class="feature-title">Pinned Shortcuts</span>
-          <span class="feature-desc">Pin up to 6 bookmarks as quick-access icons</span>
+          <span class="feature-icon">⏱️</span>
+          <span class="feature-title">Focus Timer</span>
+          <span class="feature-desc">Pomodoro-style focus &amp; break sessions, fully customizable</span>
         </div>
 
         <div class="feature-card">
@@ -117,7 +117,9 @@
       </button>
 
       <button class="task-btn" id="addNoteBtn" title="Add Note">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4l4.5 4.5L8 19H3.5v-4.5z"/><path d="M12.5 5.5l4 4"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48">
+  <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 8h10v2H7zm0 3.5h10v2H7zM7 15h6v2H7z"/>
+</svg>
       </button>
 
       <button class="task-btn" id="bookmarksToggle" title="Bookmarks">
@@ -125,16 +127,30 @@
       </button>
     </div>
 
-    <!-- Pinned App Shortcuts -->
+    <!-- Floating widget visibility toggles -->
     <div class="toolbar-divider"></div>
-    <div class="toolbar-group" id="pinnedShortcutsGroup">
-      <!-- 4 slots filled dynamically -->
+    <div class="toolbar-group">
+      <button class="task-btn" id="countdownToggleBtn" title="Countdown">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+      </button>
+      <button class="task-btn" id="pomodoroToggleBtn" title="Focus Timer">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="13" r="8"/><line x1="12" y1="13" x2="12" y2="9"/><line x1="12" y1="13" x2="15" y2="15"/><line x1="10" y1="2" x2="14" y2="2"/></svg>
+      </button>
     </div>
 
-    <!-- Pin / manage shortcuts button -->
-    <button class="task-btn toolbar-pin-btn" id="pinShortcutsBtn" title="Pin App Shortcuts">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </button>
+    <!-- Sites (manual quick-launcher) -->
+    <div class="toolbar-divider"></div>
+    <div class="toolbar-group">
+      <button class="task-btn" id="sitesToggleBtn" title="Sites">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" shape-rendering="crispEdges">
+          <rect x="4" y="9" width="16" height="10" rx="0"/>
+          <rect x="4" y="9" width="16" height="4" rx="0"/>
+          <rect x="10.5" y="13" width="3" height="2.4" rx="0"/>
+          <path d="M4 9V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/>
+        </svg>
+      </button>
+    </div>
+
     <div class="toolbar-bottom">
       <button class="task-btn" id="themeToggle" title="Toggle Theme">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" id="themeIcon"><circle cx="12" cy="12" r="4.5"/></svg>
@@ -158,16 +174,32 @@
     </ul>
   </div>
 
-  <!-- Pin Picker Panel (choose shortcuts to pin) -->
-  <div class="bookmarks-drawer pin-picker" id="pinPickerPanel">
+  <!-- Sites Drawer (manual quick-access launcher, replaces pinned shortcuts) -->
+  <div class="bookmarks-drawer sites-drawer" id="sitesDrawer">
     <div class="drawer-header">
-      <span class="drawer-title">Pin Shortcuts</span>
-      <button id="closePinPicker" class="drawer-close">&times;</button>
+      <span class="drawer-title">Sites</span>
+      <button id="closeSitesDrawer" class="drawer-close">&times;</button>
     </div>
-    <p class="pin-picker-hint" id="pinPickerHint">Choose up to 6 bookmarks to pin as quick-access icons.</p>
-    <ul class="bookmarks-list" id="pinPickerList">
-      <!-- Dynamically populated -->
-    </ul>
+    <div class="sites-grid" id="sitesGrid">
+      <!-- Up to 15 site tiles rendered here -->
+    </div>
+    <button class="sites-add-btn" id="sitesAddBtn">+ Add Site</button>
+  </div>
+
+  <!-- Site tile right-click context menu -->
+  <div class="shortcut-context-menu" id="siteContextMenu" style="display:none;">
+    <button id="siteCtxEdit">
+      <svg class="ctx-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/><path d="M12.5 5.5l4 4"/>
+      </svg>
+      Edit site
+    </button>
+    <button class="ctx-danger" id="siteCtxDelete">
+      <svg class="ctx-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+      Delete site
+    </button>
   </div>
 
   <!-- center clock -->
@@ -181,9 +213,9 @@
     <div class="search-bar-wrapper" id="searchBarWrapper">
       <div class="search-bar-container" id="searchBarContainer">
         <div class="search-bar-icon">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-            <path d="M12.24 10.285V13.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.579-7.859-8s3.53-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l2.427-2.334C17.955 2.192 15.34 1 12.24 1 5.92 1 12 5.92 1 12s4.92 11 11.24 11c6.596 0 10.985-4.637 10.985-11.173 0-.753-.08-1.332-.178-1.542H12.24z"/>
-          </svg>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="16" height="16">
+  <path fill="currentColor" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.3 0 6.3 1.2 8.6 3.2l6-6C34.9 4.1 29.7 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/>
+</svg>
         </div>
         <input type="text" id="searchBarInput" placeholder="Search or type a URL..." autocomplete="off" />
         <kbd class="search-shortcut-hint">Ctrl+G</kbd>
@@ -195,7 +227,7 @@
 
   <!-- right control panel -->
   <aside class="right-panel">
-    <section class="card tasks-card">
+    <section class="card tasks-card" id="tasksCard">
       <header class="card-head">
         <span class="card-title">Tasks</span>
         <span class="card-sub" id="taskCount">0 left</span>
@@ -209,23 +241,126 @@
     </section>
   </aside>
 
+  <!-- Exam Countdown widget — floating, draggable, independently hideable -->
+  <section class="card countdown-card floating-widget" id="countdownCard">
+    <button class="widget-close" id="countdownCloseBtn" title="Hide countdown">
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <button class="countdown-edit-btn" id="countdownEditBtn" title="Edit countdown">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/><path d="M12.5 5.5l4 4"/></svg>
+    </button>
+    <div class="countdown-days" id="countdownDays">—</div>
+    <div class="countdown-name" id="countdownName">Set up your countdown</div>
+    <div class="countdown-date" id="countdownDate"></div>
+  </section>
+
+  <!-- Pomodoro / Focus Timer widget — floating, draggable, independently hideable -->
+  <section class="card pomodoro-card floating-widget" id="pomodoroCard">
+    <button class="widget-close" id="pomodoroCloseBtn" title="Hide timer">
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <header class="card-head">
+      <span class="card-title" id="pomodoroModeLabel">Focus Session</span>
+      <button class="pomodoro-settings-btn" id="pomodoroSettingsBtn" title="Timer settings">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.488.488 0 0 0 14 2h-4c-.24 0-.43.17-.47.41l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.484.484 0 0 0-.61.22l-2 3.46c-.12.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.23.41.47.41h4c.24 0 .43-.17.47-.41l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
+      </button>
+    </header>
+
+    <div class="pomodoro-ring-wrap">
+      <svg class="pomodoro-ring" viewBox="0 0 120 120" width="120" height="120">
+        <circle class="pomodoro-ring-track" cx="60" cy="60" r="52"/>
+        <circle class="pomodoro-ring-progress" id="pomodoroRingProgress" cx="60" cy="60" r="52"/>
+      </svg>
+      <div class="pomodoro-time" id="pomodoroTime">25:00</div>
+    </div>
+
+    <div class="pomodoro-controls">
+      <button class="pomodoro-btn pomodoro-btn-primary" id="pomodoroStartPause">Start</button>
+      <button class="pomodoro-btn" id="pomodoroReset">Reset</button>
+    </div>
+  </section>
+
+  <!-- Countdown edit dialog -->
+  <div class="mini-dialog-backdrop" id="countdownDialogBackdrop">
+    <div class="mini-dialog" id="countdownDialog">
+      <div class="mini-dialog-head">
+        <span>Edit Countdown</span>
+        <button class="mini-dialog-close" id="countdownDialogClose">&times;</button>
+      </div>
+      <label class="mini-dialog-label" for="countdownNameInput">Event name</label>
+      <input type="text" id="countdownNameInput" class="mini-dialog-input" placeholder="e.g. UPSC Prelims" maxlength="40" />
+      <label class="mini-dialog-label" for="countdownDateInput">Event date</label>
+      <input type="date" id="countdownDateInput" class="mini-dialog-input" />
+      <button class="mini-dialog-save" id="countdownDialogSave">Save</button>
+    </div>
+  </div>
+
+  <!-- Pomodoro settings dialog -->
+  <div class="mini-dialog-backdrop" id="pomodoroDialogBackdrop">
+    <div class="mini-dialog" id="pomodoroDialog">
+      <div class="mini-dialog-head">
+        <span>Timer Settings</span>
+        <button class="mini-dialog-close" id="pomodoroDialogClose">&times;</button>
+      </div>
+      <label class="mini-dialog-label" for="pomodoroFocusInput">Focus duration (minutes)</label>
+      <input type="number" id="pomodoroFocusInput" class="mini-dialog-input" min="1" max="180" />
+      <label class="mini-dialog-label" for="pomodoroBreakInput">Break duration (minutes)</label>
+      <input type="number" id="pomodoroBreakInput" class="mini-dialog-input" min="0" max="60" />
+      <button class="mini-dialog-save" id="pomodoroDialogSave">Save</button>
+    </div>
+  </div>
 
 
-  <!-- Pinned shortcut right-click context menu -->
-  <div class="shortcut-context-menu" id="shortcutContextMenu" style="display:none;">
-    <button class="ctx-danger" id="ctxUnpin">
-      <svg class="ctx-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-      Unpin shortcut
-    </button>
-    <button id="ctxOpenLink">
-      <svg class="ctx-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-        <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-      </svg>
-      Open site
-    </button>
+
+  <!-- Add / Edit Site dialog -->
+  <div class="mini-dialog-backdrop" id="siteDialogBackdrop">
+    <div class="mini-dialog" id="siteDialog">
+      <div class="mini-dialog-head">
+        <span id="siteDialogTitle">Add Site</span>
+        <button class="mini-dialog-close" id="siteDialogClose">&times;</button>
+      </div>
+      <label class="mini-dialog-label" for="siteNameInput">Site name</label>
+      <input type="text" id="siteNameInput" class="mini-dialog-input" placeholder="e.g. YouTube" maxlength="30" />
+      <label class="mini-dialog-label" for="siteUrlInput">Site URL</label>
+      <input type="text" id="siteUrlInput" class="mini-dialog-input" placeholder="e.g. https://youtube.com" />
+      <div class="mini-dialog-error" id="siteDialogError"></div>
+      <button class="mini-dialog-save" id="siteDialogSave">Save</button>
+    </div>
+  </div>
+
+  <!-- Settings menu — opened with the "/" key -->
+  <div class="mini-dialog-backdrop settings-backdrop" id="settingsBackdrop">
+    <div class="mini-dialog settings-dialog" id="settingsDialog">
+      <div class="mini-dialog-head">
+        <span>Settings</span>
+        <button class="mini-dialog-close" id="settingsClose">&times;</button>
+      </div>
+
+      <div class="settings-list">
+        <div class="settings-row">
+          <span class="settings-row-label">Tasks</span>
+          <button class="settings-toggle" id="settingsToggleTasks" role="switch" aria-checked="true" aria-label="Toggle Tasks panel">
+            <span class="settings-toggle-knob"></span>
+          </button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-row-label">Google Search Bar</span>
+          <button class="settings-toggle" id="settingsToggleSearch" role="switch" aria-checked="true" aria-label="Toggle Google search bar">
+            <span class="settings-toggle-knob"></span>
+          </button>
+        </div>
+      </div>
+
+      <p class="settings-section-label">Backup</p>
+      <div class="settings-backup-row">
+        <button class="settings-backup-btn" id="settingsExportBtn">Export Data</button>
+        <button class="settings-backup-btn" id="settingsImportBtn">Import Data</button>
+      </div>
+      <p class="settings-backup-hint">Save everything — notes, photos, tasks, sites, countdowns, and widget positions — to one file, or restore from a previous export.</p>
+      <input type="file" id="settingsImportFile" accept="application/json" hidden>
+
+      <p class="settings-hint">Press <kbd>/</kbd> anytime to open this menu.</p>
+    </div>
   </div>
 
   <script src="script.js"></script>
