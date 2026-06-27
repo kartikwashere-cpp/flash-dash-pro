@@ -21,6 +21,29 @@ const store = {
   }
 };
 
+// ---------- generic app toast (export/import feedback, etc.) ----------
+// Visually identical to the Pomodoro toast but kept separate since that
+// one is scoped to its own widget/closure. Any feature can call this.
+let _appToastTimer = null;
+function showAppToast(title, body) {
+  let toast = document.getElementById('appToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'appToast';
+    toast.className = 'pomodoro-toast app-toast';
+    toast.innerHTML = '<div class="pomodoro-toast-title"></div><div class="pomodoro-toast-body"></div>';
+    document.body.appendChild(toast);
+  }
+  toast.querySelector('.pomodoro-toast-title').textContent = title;
+  toast.querySelector('.pomodoro-toast-body').textContent = body;
+
+  toast.classList.remove('visible');
+  requestAnimationFrame(() => toast.classList.add('visible'));
+
+  clearTimeout(_appToastTimer);
+  _appToastTimer = setTimeout(() => toast.classList.remove('visible'), 4000);
+}
+
 // ---------- clock ----------
 function tickClock() {
   const now = new Date();
@@ -263,7 +286,18 @@ let _boardZCounter = 10;
 
 function makeDraggable(el, item, onChange) {
   el.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.del') || e.target.closest('.resize') || e.target.closest('.note-text') || e.target.closest('.note-dot') || e.target.closest('.note-close') || e.target.closest('.note-resize')) return;
+    // Skip drag-start for anything interactive — buttons, inputs, editable
+    // text — so clicks on controls inside a draggable card/photo/note still
+    // register normally instead of being swallowed by the drag handler.
+    // (.del/.resize/etc. are kept explicitly for clarity/back-compat even
+    // though the generic checks below already cover them.)
+    if (
+      e.target.closest('.del') || e.target.closest('.resize') ||
+      e.target.closest('.note-text') || e.target.closest('.note-dot') ||
+      e.target.closest('.note-close') || e.target.closest('.note-resize') ||
+      e.target.closest('button') || e.target.closest('input') ||
+      e.target.closest('a') || e.target.closest('[contenteditable="true"]')
+    ) return;
     e.preventDefault();
     const startX = e.clientX, startY = e.clientY;
     const origX = item.x, origY = item.y;
@@ -443,7 +477,7 @@ async function addPhotoFiles(files) {
 addPhotoBtn.addEventListener('click', () => {
   // Close any open panels before opening the file picker
   bookmarksDrawer.classList.remove('open');
-  pinPickerPanel.classList.remove('open');
+  sitesDrawer.classList.remove('open');
   photoInput.click();
 });
 
@@ -594,7 +628,7 @@ function renderNoteEl(note) {
 
 addNoteBtn.addEventListener('click', async () => {
   bookmarksDrawer.classList.remove('open');
-  pinPickerPanel.classList.remove('open');
+  sitesDrawer.classList.remove('open');
 
   const [photos, notes] = await Promise.all([
     store.get('photos', []),
@@ -623,259 +657,440 @@ addNoteBtn.addEventListener('click', async () => {
   });
 });
 
-// ---------- Pinned App Shortcuts ----------
-const pinShortcutsBtn = document.getElementById('pinShortcutsBtn');
-const pinPickerPanel  = document.getElementById('pinPickerPanel');
-const closePinPicker  = document.getElementById('closePinPicker');
-const pinPickerList   = document.getElementById('pinPickerList');
-const pinPickerHint   = document.getElementById('pinPickerHint');
-const pinnedShortcutsGroup = document.getElementById('pinnedShortcutsGroup');
+// ---------- Sites Drawer (manual quick-access launcher) ----------
+const sitesToggleBtn = document.getElementById('sitesToggleBtn');
+const sitesDrawer     = document.getElementById('sitesDrawer');
+const closeSitesDrawer = document.getElementById('closeSitesDrawer');
+const sitesGrid       = document.getElementById('sitesGrid');
+const sitesAddBtn     = document.getElementById('sitesAddBtn');
 
-const MAX_PINS = 6;
+const siteDialogBackdrop = document.getElementById('siteDialogBackdrop');
+const siteDialogTitle    = document.getElementById('siteDialogTitle');
+const siteNameInput      = document.getElementById('siteNameInput');
+const siteUrlInput       = document.getElementById('siteUrlInput');
+const siteDialogError    = document.getElementById('siteDialogError');
+const siteDialogSave     = document.getElementById('siteDialogSave');
+const siteDialogClose    = document.getElementById('siteDialogClose');
 
-// Show/hide the + add-shortcut button based on current pin count
-function syncPinBtn(pinnedCount) {
-  pinShortcutsBtn.style.display = pinnedCount >= MAX_PINS ? 'none' : '';
-}
+const MAX_SITES = 15;
+let _editingSiteId = null; // null while adding; set to a site's id while editing
 
-// Open / close pin picker panel
-pinShortcutsBtn.addEventListener('click', () => {
-  const isOpen = pinPickerPanel.classList.contains('open');
-  // Close bookmarks drawer if open
-  bookmarksDrawer.classList.remove('open');
-  pinPickerPanel.classList.toggle('open', !isOpen);
-  if (!isOpen) loadPinPicker();
-});
-
-closePinPicker.addEventListener('click', () => {
-  pinPickerPanel.classList.remove('open');
-});
-
-// Close if clicking outside
-document.addEventListener('click', (e) => {
-  if (!pinPickerPanel.contains(e.target) && !pinShortcutsBtn.contains(e.target)) {
-    pinPickerPanel.classList.remove('open');
-  }
-});
-
-async function loadPinPicker() {
-  pinPickerList.innerHTML = '<div class="bookmark-empty">Loading bookmarks…</div>';
-
-  let allBookmarks = [];
-
-  if (window.chrome && chrome.bookmarks && chrome.bookmarks.getTree) {
-    allBookmarks = await new Promise((res) => {
-      chrome.bookmarks.getTree((tree) => {
-        const flat = [];
-        function traverse(nodes) {
-          nodes.forEach(n => {
-            if (n.url) flat.push({ id: n.id, title: n.title || n.url, url: n.url });
-            if (n.children) traverse(n.children);
-          });
-        }
-        traverse(tree);
-        res(flat);
-      });
+// Same navigation pattern used by bookmarks, pinned shortcuts (formerly),
+// and the search bar: prefer the tabs API inside the extension, fall back
+// to a plain location change for non-extension/testing contexts.
+function navigateTo(url) {
+  if (window.chrome && chrome.tabs) {
+    chrome.tabs.getCurrent(tab => {
+      if (tab) chrome.tabs.update(tab.id, { url });
+      else window.location.href = url;
     });
   } else {
-    // Fallback mock data for non-extension testing
-    allBookmarks = [
-      { id: '1', title: 'Google',       url: 'https://google.com' },
-      { id: '2', title: 'GitHub',       url: 'https://github.com' },
-      { id: '3', title: 'YouTube',      url: 'https://youtube.com' },
-      { id: '4', title: 'Hacker News',  url: 'https://news.ycombinator.com' },
-      { id: '5', title: 'Brave Search', url: 'https://search.brave.com' },
-    ];
+    window.location.href = url;
   }
-
-  renderPinPicker(allBookmarks);
 }
 
-async function renderPinPicker(bookmarks) {
-  const pinned = await store.get('pinnedShortcuts', []);
-  pinPickerList.innerHTML = '';
+// Open / close drawer
+sitesToggleBtn.addEventListener('click', () => {
+  const isOpen = sitesDrawer.classList.contains('open');
+  bookmarksDrawer.classList.remove('open');
+  sitesDrawer.classList.toggle('open', !isOpen);
+  if (!isOpen) loadSites();
+});
 
-  if (bookmarks.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'bookmark-empty';
-    empty.textContent = 'No bookmarks found.';
-    pinPickerList.appendChild(empty);
-    return;
+closeSitesDrawer.addEventListener('click', () => {
+  sitesDrawer.classList.remove('open');
+});
+
+document.addEventListener('click', (e) => {
+  if (!sitesDrawer.contains(e.target) && !sitesToggleBtn.contains(e.target)) {
+    sitesDrawer.classList.remove('open');
   }
+});
 
-  bookmarks.forEach(bm => {
-    const isPinned = pinned.some(p => p.url === bm.url);
-    const item = document.createElement('li');
-    item.className = 'pin-picker-item' + (isPinned ? ' pinned' : '');
+async function loadSites() {
+  const sites = await store.get('customSites', []);
+  renderSitesGrid(sites);
+}
 
-    // Favicon
+function renderSitesGrid(sites) {
+  sitesGrid.innerHTML = '';
+
+  sites.forEach(site => {
+    const tile = document.createElement('div');
+    tile.className = 'site-tile';
+
+    const open = document.createElement('button');
+    open.className = 'site-tile-open';
+    open.title = site.name;
+
     const img = document.createElement('img');
-    img.className = 'bookmark-icon';
-    img.src = faviconUrl(bm.url);
+    img.className = 'site-tile-icon';
+    img.src = faviconUrl(site.url);
     img.alt = '';
     img.onerror = () => {
       img.remove();
       const fb = document.createElement('div');
-      fb.className = 'bookmark-fallback-icon';
-      fb.textContent = (bm.title || 'B').trim().slice(0, 1).toUpperCase();
-      item.insertBefore(fb, item.firstChild);
+      fb.className = 'site-tile-fallback';
+      fb.textContent = (site.name || '?').trim().slice(0, 1).toUpperCase();
+      open.insertBefore(fb, open.firstChild);
     };
-    item.appendChild(img);
+    open.appendChild(img);
 
-    // Title
-    const titleEl = document.createElement('span');
-    titleEl.className = 'bookmark-title';
-    titleEl.textContent = bm.title || bm.url;
-    titleEl.title = bm.url;
-    item.appendChild(titleEl);
+    const label = document.createElement('span');
+    label.className = 'site-tile-name';
+    label.textContent = site.name;
+    open.appendChild(label);
 
-    // Check indicator
-    const check = document.createElement('div');
-    check.className = 'pin-check';
-    item.appendChild(check);
-
-    // Toggle pin on click
-    item.addEventListener('click', async () => {
-      const current = await store.get('pinnedShortcuts', []);
-      const idx = current.findIndex(p => p.url === bm.url);
-      if (idx > -1) {
-        // Unpin
-        current.splice(idx, 1);
-        item.classList.remove('pinned');
-      } else {
-        if (current.length >= MAX_PINS) {
-          // Visual shake to indicate max reached
-          pinPickerHint.style.color = 'var(--text)';
-          pinPickerHint.textContent = `All ${MAX_PINS} slots filled. Right-click a pinned icon to unpin it.`;
-          setTimeout(() => {
-            pinPickerHint.style.color = '';
-            pinPickerHint.textContent = `Choose up to ${MAX_PINS} bookmarks to pin as quick-access icons.`;
-          }, 2500);
-          return;
-        }
-        // Pin
-        current.push({ title: bm.title || bm.url, url: bm.url });
-        item.classList.add('pinned');
-      }
-      await store.set('pinnedShortcuts', current);
-      renderPinnedToolbar(current);
-      syncPinBtn(current.length);
+    open.addEventListener('click', () => navigateTo(site.url));
+    open.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showSiteContextMenu(e.clientX, e.clientY, site);
     });
 
-    pinPickerList.appendChild(item);
+    tile.appendChild(open);
+    sitesGrid.appendChild(tile);
   });
+
+  // Pad remaining slots up to 15 with empty placeholders so the 3x5 grid
+  // shape stays fixed regardless of how many sites are saved.
+  for (let i = sites.length; i < MAX_SITES; i++) {
+    const empty = document.createElement('div');
+    empty.className = 'site-tile site-tile-empty';
+    sitesGrid.appendChild(empty);
+  }
+
+  syncSitesAddBtn(sites.length);
 }
 
-// ---------- Right-click context menu for pinned shortcuts ----------
-const shortcutContextMenu = document.getElementById('shortcutContextMenu');
-const ctxUnpin   = document.getElementById('ctxUnpin');
-const ctxOpenLink = document.getElementById('ctxOpenLink');
+// ---------- Right-click context menu for site tiles ----------
+const siteContextMenu = document.getElementById('siteContextMenu');
+const siteCtxEdit = document.getElementById('siteCtxEdit');
+const siteCtxDelete = document.getElementById('siteCtxDelete');
 
-let _ctxTarget = null; // the shortcut object currently right-clicked
+let _siteCtxTarget = null; // the site object currently right-clicked
 
-function showContextMenu(x, y, shortcut) {
-  _ctxTarget = shortcut;
-  shortcutContextMenu.style.display = 'block';
+function showSiteContextMenu(x, y, site) {
+  _siteCtxTarget = site;
+  siteContextMenu.style.display = 'block';
 
-  // Position: prefer right of cursor, flip left if too close to edge
-  const menuW = 160;
-  const menuH = shortcutContextMenu.offsetHeight || 80;
-  const left = (x + menuW > window.innerWidth)  ? x - menuW : x;
+  // Position: prefer right/below cursor, flip if too close to an edge.
+  const menuW = siteContextMenu.offsetWidth || 160;
+  const menuH = siteContextMenu.offsetHeight || 80;
+  const left = (x + menuW > window.innerWidth) ? x - menuW : x;
   const top  = (y + menuH > window.innerHeight) ? y - menuH : y;
 
-  shortcutContextMenu.style.left = left + 'px';
-  shortcutContextMenu.style.top  = top  + 'px';
-  // Re-trigger animation each time
-  shortcutContextMenu.style.animation = 'none';
-  requestAnimationFrame(() => {
-    shortcutContextMenu.style.animation = '';
-  });
+  siteContextMenu.style.left = left + 'px';
+  siteContextMenu.style.top = top + 'px';
+
+  // Re-trigger the entrance animation each time it opens.
+  siteContextMenu.style.animation = 'none';
+  requestAnimationFrame(() => { siteContextMenu.style.animation = ''; });
 }
 
-function hideContextMenu() {
-  shortcutContextMenu.style.display = 'none';
-  _ctxTarget = null;
+function hideSiteContextMenu() {
+  siteContextMenu.style.display = 'none';
+  _siteCtxTarget = null;
 }
 
-// Dismiss on any click outside the menu
 document.addEventListener('click', (e) => {
-  if (!shortcutContextMenu.contains(e.target)) hideContextMenu();
+  if (!siteContextMenu.contains(e.target)) hideSiteContextMenu();
 });
-
-// Dismiss on Escape
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') hideContextMenu();
+  if (e.key === 'Escape') hideSiteContextMenu();
+});
+// A right-click elsewhere (e.g. another tile) should also close the menu
+// before the new one opens, rather than leaving a stale one behind.
+sitesGrid.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('.site-tile-open')) hideSiteContextMenu();
 });
 
-// "Unpin shortcut" action
-ctxUnpin.addEventListener('click', async () => {
-  if (!_ctxTarget) return;
-  const current = await store.get('pinnedShortcuts', []);
-  const updated = current.filter(p => p.url !== _ctxTarget.url);
-  await store.set('pinnedShortcuts', updated);
-  renderPinnedToolbar(updated);
-  syncPinBtn(updated.length);
-  hideContextMenu();
+siteCtxEdit.addEventListener('click', () => {
+  if (!_siteCtxTarget) return;
+  openSiteDialog(_siteCtxTarget);
+  hideSiteContextMenu();
 });
 
-// "Open site" action
-ctxOpenLink.addEventListener('click', () => {
-  if (!_ctxTarget) return;
-  if (window.chrome && chrome.tabs) {
-    chrome.tabs.getCurrent(tab => chrome.tabs.update(tab.id, { url: _ctxTarget.url }));
-  } else {
-    window.location.href = _ctxTarget.url;
-  }
-  hideContextMenu();
+siteCtxDelete.addEventListener('click', async () => {
+  if (!_siteCtxTarget) return;
+  const current = await store.get('customSites', []);
+  const updated = current.filter(s => s.id !== _siteCtxTarget.id);
+  await store.set('customSites', updated);
+  renderSitesGrid(updated);
+  syncSitesAddBtn(updated.length);
+  hideSiteContextMenu();
 });
 
-function renderPinnedToolbar(pinned) {
-  pinnedShortcutsGroup.innerHTML = '';
-
-  pinned.forEach(p => {
-    const btn = document.createElement('button');
-    btn.className = 'pinned-shortcut task-btn';
-    btn.setAttribute('data-title', p.title);
-    btn.title = '';  // suppress native tooltip; we use CSS ::after
-    btn.setAttribute('aria-label', p.title);
-
-    const img = document.createElement('img');
-    img.src = faviconUrl(p.url);
-    img.alt = p.title;
-    img.onerror = () => {
-      img.remove();
-      const fb = document.createElement('div');
-      fb.className = 'shortcut-fallback';
-      fb.textContent = (p.title || '?').trim().slice(0, 1).toUpperCase();
-      btn.appendChild(fb);
-    };
-    btn.appendChild(img);
-
-    // Left-click → navigate
-    btn.addEventListener('click', () => {
-      if (window.chrome && chrome.tabs) {
-        chrome.tabs.getCurrent(tab => chrome.tabs.update(tab.id, { url: p.url }));
-      } else {
-        window.location.href = p.url;
-      }
-    });
-
-    // Right-click → show context menu
-    btn.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      showContextMenu(e.clientX + 6, e.clientY + 2, p);
-    });
-
-    pinnedShortcutsGroup.appendChild(btn);
-  });
+function syncSitesAddBtn(count) {
+  sitesAddBtn.style.display = count >= MAX_SITES ? 'none' : '';
 }
 
-// Init pinned shortcuts on load
+// ---------- Add / Edit Site dialog ----------
+function normaliseSiteUrl(raw) {
+  const t = raw.trim();
+  if (/^https?:\/\//i.test(t)) return t;
+  return 'https://' + t;
+}
+
+function isValidSiteUrl(raw) {
+  try {
+    const u = new URL(normaliseSiteUrl(raw));
+    return !!u.hostname && u.hostname.includes('.');
+  } catch (e) {
+    return false;
+  }
+}
+
+function openSiteDialog(site) {
+  _editingSiteId = site ? site.id : null;
+  siteDialogTitle.textContent = site ? 'Edit Site' : 'Add Site';
+  siteNameInput.value = site ? site.name : '';
+  siteUrlInput.value = site ? site.url : '';
+  siteDialogError.textContent = '';
+  siteDialogBackdrop.classList.add('open');
+  setTimeout(() => siteNameInput.focus(), 50);
+}
+
+function closeSiteDialog() {
+  siteDialogBackdrop.classList.remove('open');
+  _editingSiteId = null;
+}
+
+sitesAddBtn.addEventListener('click', () => openSiteDialog(null));
+siteDialogClose.addEventListener('click', closeSiteDialog);
+siteDialogBackdrop.addEventListener('click', (e) => {
+  if (e.target === siteDialogBackdrop) closeSiteDialog();
+});
+
+siteDialogSave.addEventListener('click', async () => {
+  const name = siteNameInput.value.trim();
+  const urlRaw = siteUrlInput.value.trim();
+
+  if (!name || !urlRaw) {
+    siteDialogError.textContent = 'Please fill in both fields.';
+    return;
+  }
+  if (!isValidSiteUrl(urlRaw)) {
+    siteDialogError.textContent = 'Please enter a valid URL.';
+    return;
+  }
+
+  const url = normaliseSiteUrl(urlRaw);
+  const current = await store.get('customSites', []);
+
+  if (_editingSiteId) {
+    const idx = current.findIndex(s => s.id === _editingSiteId);
+    if (idx > -1) current[idx] = { ...current[idx], name, url };
+  } else {
+    if (current.length >= MAX_SITES) {
+      siteDialogError.textContent = `You can pin up to ${MAX_SITES} sites.`;
+      return;
+    }
+    current.push({ id: Date.now() + Math.random().toString(36).slice(2), name, url });
+  }
+
+  await store.set('customSites', current);
+  renderSitesGrid(current);
+  closeSiteDialog();
+});
+
+// Init sites add-button visibility on load
 (async () => {
-  const pinned = await store.get('pinnedShortcuts', []);
-  renderPinnedToolbar(pinned);
-  syncPinBtn(pinned.length);
+  const sites = await store.get('customSites', []);
+  syncSitesAddBtn(sites.length);
 })();
+
+
+// ══════════════════════════════════════════════════════════════
+// Settings Menu — opened with "/"
+// ──────────────────────────────────────────────────────────────
+// For now just two visibility toggles (Tasks, Google search bar).
+// Built to grow: future items (e.g. export/import JSON backup) just
+// add another .settings-row + a small handler, following this same
+// pattern of "settingsState key -> apply function -> toggle handler".
+// ══════════════════════════════════════════════════════════════
+(function initSettingsMenu() {
+  const backdrop = document.getElementById('settingsBackdrop');
+  const closeBtn = document.getElementById('settingsClose');
+  const toggleTasksBtn = document.getElementById('settingsToggleTasks');
+  const toggleSearchBtn = document.getElementById('settingsToggleSearch');
+
+  const tasksCard = document.getElementById('tasksCard');
+  const searchWrapper = document.getElementById('searchBarWrapper');
+
+  const DEFAULT_SETTINGS = { tasksVisible: true, searchVisible: true };
+  let settings = { ...DEFAULT_SETTINGS };
+
+  function applyTasksVisibility() {
+    tasksCard.style.display = settings.tasksVisible ? '' : 'none';
+    toggleTasksBtn.setAttribute('aria-checked', String(settings.tasksVisible));
+  }
+
+  function applySearchVisibility() {
+    searchWrapper.style.display = settings.searchVisible ? '' : 'none';
+    toggleSearchBtn.setAttribute('aria-checked', String(settings.searchVisible));
+  }
+
+  async function persist() {
+    await store.set('settingsState', settings);
+  }
+
+  function openSettings() {
+    backdrop.classList.add('open');
+  }
+
+  function closeSettings() {
+    backdrop.classList.remove('open');
+  }
+
+  closeBtn.addEventListener('click', closeSettings);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeSettings();
+  });
+
+  toggleTasksBtn.addEventListener('click', async () => {
+    settings.tasksVisible = !settings.tasksVisible;
+    applyTasksVisibility();
+    await persist();
+  });
+
+  toggleSearchBtn.addEventListener('click', async () => {
+    settings.searchVisible = !settings.searchVisible;
+    applySearchVisibility();
+    await persist();
+  });
+
+  // ── Backup: Export / Import ──────────────────────────────────
+  // Bundles every piece of user data Flash Dash stores into one JSON
+  // file the user can save externally, and can restore it later —
+  // e.g. after a browser reinstall or when moving to a new device.
+  const BACKUP_KEYS = [
+    'notes', 'photos', 'tasks', 'customSites',
+    'countdownEvent', 'countdownWidget', 'pomodoroWidget'
+  ];
+
+  const exportBtn = document.getElementById('settingsExportBtn');
+  const importBtn = document.getElementById('settingsImportBtn');
+  const importFile = document.getElementById('settingsImportFile');
+
+  async function exportData() {
+    try {
+      const data = {};
+      await Promise.all(BACKUP_KEYS.map(async (key) => {
+        data[key] = await store.get(key, null);
+      }));
+
+      const payload = {
+        app: 'flash-dash',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        data
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const dateStamp = new Date().toISOString().slice(0, 10);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `flash-dash-backup-${dateStamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      showAppToast('Backup Exported', 'Your data has been saved to a file.');
+    } catch (err) {
+      showAppToast('Export Failed', 'Something went wrong creating the backup.');
+    }
+  }
+
+  async function importData(file) {
+    let parsed;
+    try {
+      const text = await file.text();
+      parsed = JSON.parse(text);
+    } catch (err) {
+      showAppToast('Import Failed', 'That file is not valid JSON.');
+      return;
+    }
+
+    const data = parsed && parsed.data && typeof parsed.data === 'object' ? parsed.data : null;
+    if (!data) {
+      showAppToast('Import Failed', 'This file doesn\'t look like a Flash Dash backup.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Importing will overwrite your current notes, photos, tasks, sites, countdowns, and widget positions with the contents of this file. This cannot be undone. Continue?'
+    );
+    if (!confirmed) return;
+
+    try {
+      await Promise.all(BACKUP_KEYS.map(async (key) => {
+        if (Object.prototype.hasOwnProperty.call(data, key) && data[key] !== null) {
+          await store.set(key, data[key]);
+        }
+      }));
+      showAppToast('Backup Imported', 'Reloading to apply your restored data…');
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) {
+      showAppToast('Import Failed', 'Something went wrong restoring the backup.');
+    }
+  }
+
+  if (exportBtn) {
+    exportBtn.addEventListener('click', exportData);
+  }
+
+  if (importBtn && importFile) {
+    importBtn.addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', () => {
+      const file = importFile.files && importFile.files[0];
+      importFile.value = ''; // allow re-selecting the same file later
+      if (file) importData(file);
+    });
+  }
+
+  // "/" opens the settings menu — but only when the user isn't actively
+  // typing somewhere (input/textarea/contenteditable), since "/" is a
+  // normal character in task text, notes, the search bar, site fields, etc.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/') return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    const overlay = document.getElementById('welcomeOverlay');
+    if (overlay && overlay.classList.contains('visible')) return;
+
+    const active = document.activeElement;
+    const tag = active ? active.tagName : '';
+    const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' ||
+      (active && active.isContentEditable);
+    if (isEditable) return;
+
+    // If some other modal/drawer is already open, let "/" type normally
+    // there instead of stacking the settings menu on top of it.
+    if (backdrop.classList.contains('open')) {
+      e.preventDefault();
+      closeSettings();
+      return;
+    }
+
+    e.preventDefault();
+    openSettings();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && backdrop.classList.contains('open')) closeSettings();
+  });
+
+  (async function init() {
+    const saved = await store.get('settingsState', null);
+    settings = saved ? { ...DEFAULT_SETTINGS, ...saved } : { ...DEFAULT_SETTINGS };
+    applyTasksVisibility();
+    applySearchVisibility();
+  })();
+})();
+
 
 // ---------- Google Search Bar (enhanced) ----------
 (function () {
@@ -1274,4 +1489,515 @@ function renderPinnedToolbar(pinned) {
     // Fallback: hide after 450 ms even if transitionend never fires
     setTimeout(() => { overlay.style.display = 'none'; }, 450);
   });
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// Floating Dashboard Widgets (Countdown, Pomodoro)
+// ──────────────────────────────────────────────────────────────
+// Reuses the board's drag/z-index conventions (makeDraggable,
+// bringToFront, the shared _boardZCounter) but for widgets that live
+// outside the board canvas as independent position:fixed elements,
+// so they never get mixed in with photos/notes or clipped by the board.
+// ══════════════════════════════════════════════════════════════
+
+// Default placement mirrors where these cards used to sit in the
+// right-panel stack, so existing users see them roughly where they expect.
+const FLOATING_WIDGET_DEFAULTS = {
+  countdownWidget: { visible: true, x: null, y: 22, z: 6 }, // x resolved at init (right-aligned)
+  pomodoroWidget:  { visible: true, x: null, y: 200, z: 6 }
+};
+
+// Sets up drag + persisted position/visibility + bring-to-front for a
+// single floating widget. Returns helpers the caller can use to react
+// to visibility toggles from the toolbar.
+function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
+  let widget = null;
+
+  async function persist() {
+    await store.set(key, widget);
+  }
+
+  function applyPosition() {
+    el.style.left = widget.x + 'px';
+    el.style.top = widget.y + 'px';
+  }
+
+  function applyVisibility(animate) {
+    if (widget.visible) {
+      el.style.display = '';
+      // Force a reflow so the fade-in transition actually fires when
+      // toggled back on from display:none.
+      if (animate) {
+        el.classList.remove('widget-visible');
+        requestAnimationFrame(() => el.classList.add('widget-visible'));
+      } else {
+        el.classList.add('widget-visible');
+      }
+      toggleBtn.classList.add('active');
+    } else {
+      el.classList.remove('widget-visible');
+      toggleBtn.classList.remove('active');
+      if (animate) {
+        setTimeout(() => { if (!widget.visible) el.style.display = 'none'; }, 220);
+      } else {
+        el.style.display = 'none';
+      }
+    }
+  }
+
+  function bringWidgetToFront() {
+    if (!widget) return;
+    _boardZCounter += 1;
+    widget.z = _boardZCounter;
+    el.style.zIndex = _boardZCounter;
+    persist();
+  }
+
+  makeDraggable(el, widget_proxy(), () => persist());
+
+  // makeDraggable expects an {x, y} item it can mutate live during drag;
+  // we proxy reads/writes straight through to `widget` itself once it's
+  // loaded, so dragging keeps working after init() replaces the object.
+  function widget_proxy() {
+    return {
+      get x() { return widget ? widget.x : 0; },
+      set x(v) { if (widget) widget.x = v; },
+      get y() { return widget ? widget.y : 0; },
+      set y(v) { if (widget) widget.y = v; }
+    };
+  }
+
+  el.addEventListener('pointerdown', () => bringWidgetToFront());
+
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!widget) return;
+    widget.visible = false;
+    applyVisibility(true);
+    persist();
+  });
+
+  toggleBtn.addEventListener('click', () => {
+    if (!widget) return;
+    widget.visible = !widget.visible;
+    if (widget.visible) bringWidgetToFront();
+    applyVisibility(true);
+    persist();
+  });
+
+  (async function init() {
+    const saved = await store.get(key, null);
+    const defaults = FLOATING_WIDGET_DEFAULTS[key];
+    widget = saved ? { ...defaults, ...saved } : { ...defaults };
+
+    // Resolve a right-aligned default x the first time this widget is
+    // ever shown, now that we know the viewport and card width.
+    if (widget.x === null || widget.x === undefined) {
+      widget.x = Math.max(20, window.innerWidth - defaultWidthForX - 22);
+    }
+
+    if (widget.z > _boardZCounter) _boardZCounter = widget.z;
+    el.style.zIndex = widget.z;
+    applyPosition();
+    applyVisibility(false);
+  })();
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// Exam Countdown Card
+// ══════════════════════════════════════════════════════════════
+(function initCountdown() {
+  const card = document.getElementById('countdownCard');
+  const daysEl = document.getElementById('countdownDays');
+  const nameEl = document.getElementById('countdownName');
+  const dateEl = document.getElementById('countdownDate');
+  const editBtn = document.getElementById('countdownEditBtn');
+
+  const backdrop = document.getElementById('countdownDialogBackdrop');
+  const nameInput = document.getElementById('countdownNameInput');
+  const dateInput = document.getElementById('countdownDateInput');
+  const saveBtn = document.getElementById('countdownDialogSave');
+  const closeBtn = document.getElementById('countdownDialogClose');
+
+  if (!card) return;
+
+  // Midnight-to-midnight day diff, immune to DST/hour drift.
+  function daysBetween(fromDate, toDate) {
+    const a = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+    const b = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate());
+    return Math.round((b - a) / 86400000);
+  }
+
+  function formatEventDate(d) {
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  async function render() {
+    const event = await store.get('countdownEvent', null);
+    card.classList.remove('is-today', 'is-past');
+
+    if (!event || !event.date || !event.name) {
+      daysEl.textContent = '—';
+      nameEl.textContent = 'Set up your countdown';
+      dateEl.textContent = '';
+      return;
+    }
+
+    // event.date is an HTML <input type="date"> value: "YYYY-MM-DD".
+    // Parse as local time (not UTC) so the displayed day matches what was picked.
+    const [y, m, d] = event.date.split('-').map(Number);
+    const eventDate = new Date(y, m - 1, d);
+    const today = new Date();
+    const diff = daysBetween(today, eventDate);
+
+    nameEl.textContent = event.name;
+
+    if (diff > 0) {
+      daysEl.textContent = `${diff} Day${diff === 1 ? '' : 's'} Left`;
+      dateEl.textContent = formatEventDate(eventDate);
+    } else if (diff === 0) {
+      card.classList.add('is-today');
+      daysEl.textContent = 'Today!';
+      dateEl.textContent = formatEventDate(eventDate);
+    } else {
+      card.classList.add('is-past');
+      daysEl.textContent = 'Event Completed';
+      dateEl.textContent = formatEventDate(eventDate);
+    }
+  }
+
+  function openDialog() {
+    store.get('countdownEvent', null).then(event => {
+      nameInput.value = event && event.name ? event.name : '';
+      dateInput.value = event && event.date ? event.date : '';
+      backdrop.classList.add('open');
+      setTimeout(() => nameInput.focus(), 50);
+    });
+  }
+
+  function closeDialog() {
+    backdrop.classList.remove('open');
+  }
+
+  editBtn.addEventListener('click', openDialog);
+  closeBtn.addEventListener('click', closeDialog);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeDialog();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const name = nameInput.value.trim();
+    const date = dateInput.value;
+    if (!name || !date) return; // require both fields
+    await store.set('countdownEvent', { name, date });
+    closeDialog();
+    render();
+  });
+
+  render();
+
+  // Recompute periodically so "days left" rolls over at midnight without
+  // needing a reload — cheap to check every minute since it's just a diff.
+  setInterval(render, 60 * 1000);
+
+  // Also recompute the instant the tab regains visibility/focus, which
+  // catches day-rollovers that happened while the tab sat in the background.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') render();
+  });
+  window.addEventListener('focus', render);
+
+  // Make this card a draggable, hideable floating widget.
+  const closeWidgetBtn = document.getElementById('countdownCloseBtn');
+  const toggleWidgetBtn = document.getElementById('countdownToggleBtn');
+  initFloatingWidget('countdownWidget', card, toggleWidgetBtn, closeWidgetBtn, 240);
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// Pomodoro / Focus Timer Card
+// ══════════════════════════════════════════════════════════════
+(function initPomodoro() {
+  const card = document.querySelector('.pomodoro-card');
+  const modeLabel = document.getElementById('pomodoroModeLabel');
+  const timeEl = document.getElementById('pomodoroTime');
+  const ringProgress = document.getElementById('pomodoroRingProgress');
+  const startPauseBtn = document.getElementById('pomodoroStartPause');
+  const resetBtn = document.getElementById('pomodoroReset');
+  const settingsBtn = document.getElementById('pomodoroSettingsBtn');
+
+  const backdrop = document.getElementById('pomodoroDialogBackdrop');
+  const focusInput = document.getElementById('pomodoroFocusInput');
+  const breakInput = document.getElementById('pomodoroBreakInput');
+  const saveBtn = document.getElementById('pomodoroDialogSave');
+  const closeBtn = document.getElementById('pomodoroDialogClose');
+
+  if (!card) return;
+
+  const RING_CIRCUMFERENCE = 326.7256; // 2 * PI * 52, matches the SVG r=52 circle
+  const DEFAULT_STATE = {
+    mode: 'focus',
+    focusMinutes: 25,
+    breakMinutes: 5,
+    running: false,
+    startedAt: null,
+    duration: 25 * 60
+  };
+
+  let state = null;
+  let tickHandle = null;
+
+  // Tiny two-tone chime built with the Web Audio API — no audio file needed,
+  // and it still works the first time without waiting on a network asset.
+  function playChime() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const now = ctx.currentTime;
+      [880, 1320].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, now + i * 0.18);
+        gain.gain.exponentialRampToValueAtTime(0.18, now + i * 0.18 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.18 + 0.35);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * 0.18);
+        osc.stop(now + i * 0.18 + 0.4);
+      });
+      setTimeout(() => ctx.close(), 1200);
+    } catch (e) { /* Web Audio unavailable — fail silently */ }
+  }
+
+  function notify(title, body) {
+    if (window.Notification && Notification.permission === 'granted') {
+      try { new Notification(title, { body, silent: true }); } catch (e) { }
+    }
+    playChime();
+  }
+
+  // In-page toast for session-complete events — independent of the
+  // OS Notification permission, so it always shows something even if
+  // notifications were never granted.
+  let _toastTimer = null;
+  function showToast(title, body) {
+    let toast = document.getElementById('pomodoroToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'pomodoroToast';
+      toast.className = 'pomodoro-toast';
+      toast.innerHTML = '<div class="pomodoro-toast-title"></div><div class="pomodoro-toast-body"></div>';
+      document.body.appendChild(toast);
+    }
+    toast.querySelector('.pomodoro-toast-title').textContent = title;
+    toast.querySelector('.pomodoro-toast-body').textContent = body;
+
+    toast.classList.remove('visible');
+    // Re-trigger the animation even if a toast is already showing.
+    requestAnimationFrame(() => toast.classList.add('visible'));
+
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => toast.classList.remove('visible'), 4000);
+  }
+
+  function formatTime(totalSeconds) {
+    const s = Math.max(0, Math.round(totalSeconds));
+    const m = Math.floor(s / 60).toString().padStart(2, '0');
+    const r = (s % 60).toString().padStart(2, '0');
+    return `${m}:${r}`;
+  }
+
+  async function persist() {
+    await store.set('pomodoroState', state);
+  }
+
+  // Derives "how many seconds are left in the current session right now"
+  // purely from startedAt + duration — never from counting setInterval ticks.
+  // This is what makes the timer survive tab close/reopen and stay accurate.
+  function remainingSeconds() {
+    if (!state.running || !state.startedAt) return state.duration;
+    const elapsed = (Date.now() - state.startedAt) / 1000;
+    return state.duration - elapsed;
+  }
+
+  function applyModeVisuals() {
+    card.classList.toggle('is-break', state.mode === 'break');
+    modeLabel.textContent = state.mode === 'focus' ? 'Focus Session' : 'Break Time';
+  }
+
+  // Switches focus<->break, starts the new session immediately if the
+  // previous one was running, persists, and chimes.
+  //
+  // Special case: if a focus session just finished and breakMinutes is 0,
+  // a break duration of 0 is a deliberate user setting meaning "no break" —
+  // not a missing value to fall back from. In that case we stay in focus
+  // mode, reset to idle, and skip starting anything automatically.
+  async function advanceSession(autoStart) {
+    const finishedMode = state.mode;
+
+    if (finishedMode === 'focus' && state.breakMinutes === 0) {
+      state.mode = 'focus';
+      state.duration = state.focusMinutes * 60;
+      state.running = false;
+      state.startedAt = null;
+      stopTicking();
+      await persist();
+      applyModeVisuals();
+      renderTick();
+      notify('Focus Session Complete', 'Timer Reset');
+      showToast('Focus Session Complete', 'Timer Reset');
+      return;
+    }
+
+    state.mode = state.mode === 'focus' ? 'break' : 'focus';
+    state.duration = (state.mode === 'focus' ? state.focusMinutes : state.breakMinutes) * 60;
+    state.running = !!autoStart;
+    state.startedAt = autoStart ? Date.now() : null;
+    await persist();
+    applyModeVisuals();
+    if (autoStart) {
+      // Make sure a display-refresh interval is actually running for the
+      // new session — needed both when this fires from inside renderTick's
+      // own interval (already ticking) and from init's catch-up path
+      // (no interval exists yet in this tab).
+      startTicking();
+    } else {
+      stopTicking();
+    }
+    renderTick();
+    const title = finishedMode === 'focus' ? 'Focus session complete' : 'Break complete';
+    const body = state.mode === 'focus' ? 'Time to focus.' : 'Time for a short break.';
+    notify(title, body);
+    showToast(title, body);
+  }
+
+  function renderTick() {
+    let remaining = remainingSeconds();
+
+    // Session boundary crossed while we weren't actively watching (e.g. the
+    // tab was backgrounded) — settle it before painting anything.
+    if (state.running && remaining <= 0) {
+      advanceSession(true);
+      return;
+    }
+
+    timeEl.textContent = formatTime(remaining);
+    const fraction = Math.min(1, Math.max(0, 1 - remaining / state.duration));
+    ringProgress.style.strokeDashoffset = (RING_CIRCUMFERENCE * fraction).toFixed(2);
+    startPauseBtn.textContent = state.running ? 'Pause' : 'Start';
+  }
+
+  function startTicking() {
+    stopTicking();
+    // setInterval here only drives the *display* refresh; the actual
+    // remaining-time math always comes from remainingSeconds() above.
+    tickHandle = setInterval(renderTick, 1000);
+  }
+  function stopTicking() {
+    if (tickHandle) { clearInterval(tickHandle); tickHandle = null; }
+  }
+
+  async function toggleStartPause() {
+    if (state.running) {
+      // Pause: bank the exact remaining time into `duration` so resuming
+      // later (possibly after the browser was closed) is still accurate.
+      state.duration = Math.max(0, remainingSeconds());
+      state.running = false;
+      state.startedAt = null;
+      stopTicking();
+    } else {
+      state.running = true;
+      state.startedAt = Date.now();
+      startTicking();
+    }
+    await persist();
+    renderTick();
+  }
+
+  async function resetTimer() {
+    state.mode = 'focus';
+    state.duration = state.focusMinutes * 60;
+    state.running = false;
+    state.startedAt = null;
+    stopTicking();
+    await persist();
+    applyModeVisuals();
+    renderTick();
+  }
+
+  startPauseBtn.addEventListener('click', () => { if (state) toggleStartPause(); });
+  resetBtn.addEventListener('click', () => { if (state) resetTimer(); });
+
+  // ---------- settings dialog ----------
+  function openSettings() {
+    focusInput.value = state.focusMinutes;
+    breakInput.value = state.breakMinutes;
+    backdrop.classList.add('open');
+  }
+  function closeSettings() {
+    backdrop.classList.remove('open');
+  }
+  settingsBtn.addEventListener('click', () => { if (state) openSettings(); });
+  closeBtn.addEventListener('click', closeSettings);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeSettings();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const focusMin = Math.min(180, Math.max(1, parseInt(focusInput.value, 10) || 25));
+    // Break duration of 0 is valid and means "no break" — only fall back to
+    // the 5-minute default when the field was left empty/non-numeric, never
+    // when the user explicitly entered 0.
+    const breakRaw = breakInput.value.trim();
+    const breakParsed = breakRaw === '' ? 5 : parseInt(breakRaw, 10);
+    const breakMin = Math.min(60, Math.max(0, Number.isNaN(breakParsed) ? 5 : breakParsed));
+    state.focusMinutes = focusMin;
+    state.breakMinutes = breakMin;
+
+    // If the timer isn't currently running, also refresh the displayed
+    // duration for the current mode so the new setting is reflected right away.
+    if (!state.running) {
+      state.duration = (state.mode === 'focus' ? focusMin : breakMin) * 60;
+    }
+    stopTicking();
+    if (state.running) startTicking();
+    await persist();
+    closeSettings();
+    applyModeVisuals();
+    renderTick();
+  });
+
+  // ---------- init: load persisted state and catch up on elapsed time ----------
+  (async function init() {
+    const saved = await store.get('pomodoroState', null);
+    state = saved ? { ...DEFAULT_STATE, ...saved } : { ...DEFAULT_STATE };
+
+    // If a session was running while this tab (or another) was closed,
+    // catch up immediately — possibly rolling through a completed session.
+    if (state.running && state.startedAt) {
+      if (remainingSeconds() <= 0) {
+        await advanceSession(true);
+      } else {
+        startTicking();
+      }
+    }
+
+    applyModeVisuals();
+    renderTick();
+  })();
+
+  // Catch up instantly when the tab regains focus, rather than waiting
+  // for the next 1s tick — keeps multi-tab usage feeling immediate.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state) renderTick();
+  });
+
+  // Make this card a draggable, hideable floating widget.
+  const closeWidgetBtn = document.getElementById('pomodoroCloseBtn');
+  const toggleWidgetBtn = document.getElementById('pomodoroToggleBtn');
+  initFloatingWidget('pomodoroWidget', card, toggleWidgetBtn, closeWidgetBtn, 240);
 })();
