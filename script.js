@@ -18,8 +18,100 @@ const store = {
       });
     }
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { }
+  },
+  async remove(key) {
+    if (window.chrome && chrome.storage && chrome.storage.local) {
+      return new Promise(res => chrome.storage.local.remove(key, res));
+    }
+    try { localStorage.removeItem(key); } catch (e) { }
   }
 };
+
+// ---------- IndexedDB helper for media blobs ----------
+// Two object stores under one DB:
+//   • 'background' — single-slot blob for the active custom background
+//                   (key: 'current').
+//   • 'photos'     — per-photo blobs keyed by the photo's own id, used by
+//                   the goals board. Migrated from the old base64-in-
+//                   chrome.storage path the first time the user runs an
+//                   optimised build (see initBoardPhotos below). Storing
+//                   binary Blobs instead of base64 cuts both storage and
+//                   load-time CPU dramatically — the browser doesn't have
+//                   to decode 33%-larger base64 strings every page load.
+// Nothing else should call indexedDB directly — go through mediaStore.
+const mediaStore = (function () {
+  const DB_NAME    = 'flashDashMedia';
+  const BG_STORE   = 'background';
+  const PHOTO_STORE = 'photos';
+  const BG_KEY     = 'current';
+  const DB_VERSION = 2; // bumped to add the 'photos' store
+  let _db = null;
+
+  function _open() {
+    if (_db) return Promise.resolve(_db);
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(BG_STORE)) {
+          db.createObjectStore(BG_STORE);
+        }
+        if (!db.objectStoreNames.contains(PHOTO_STORE)) {
+          db.createObjectStore(PHOTO_STORE);
+        }
+      };
+      req.onsuccess = e => { _db = e.target.result; resolve(_db); };
+      req.onerror   = e => reject(e.target.error);
+    });
+  }
+
+  function _run(storeName, mode, op) {
+    return _open().then(db => new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, mode);
+      const store = tx.objectStore(storeName);
+      const req = op(store);
+      req.onsuccess = e => resolve(e.target.result);
+      req.onerror   = e => reject(e.target.error);
+    })).catch(() => null);
+  }
+
+  return {
+    // ----- background (single-slot) -----
+    async getBg()            { return (await _run(BG_STORE, 'readonly',  s => s.get(BG_KEY))) || null; },
+    async setBg(blob)        { return _run(BG_STORE, 'readwrite', s => s.put(blob, BG_KEY)); },
+    async clearBg()          { return _run(BG_STORE, 'readwrite', s => s.delete(BG_KEY)); },
+
+    // ----- photos (keyed by photo.id) -----
+    async getPhoto(id)       { return (await _run(PHOTO_STORE, 'readonly',  s => s.get(id))) || null; },
+    async setPhoto(id, blob) { return _run(PHOTO_STORE, 'readwrite', s => s.put(blob, id)); },
+    async deletePhoto(id)    { return _run(PHOTO_STORE, 'readwrite', s => s.delete(id)); },
+    async clearPhotos()      { return _run(PHOTO_STORE, 'readwrite', s => s.clear()); }
+  };
+})();
+
+// Back-compat alias: the rest of the file (and any user-facing imports/
+// exports) still references bgMediaStore by name. New code can use
+// mediaStore directly, but keeping this means zero regression risk for
+// the existing call sites in initBackground().
+const bgMediaStore = {
+  get:   () => mediaStore.getBg(),
+  set:   (blob) => mediaStore.setBg(blob),
+  clear: () => mediaStore.clearBg()
+};
+
+// Convert a data: URL string back into a Blob — used during the one-time
+// migration of existing photos from base64 (chrome.storage) to IndexedDB.
+function dataUrlToBlob(dataUrl) {
+  try {
+    const [header, b64] = dataUrl.split(',');
+    const mime = (header.match(/data:([^;]+)/) || [, 'image/png'])[1];
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  } catch (e) { return null; }
+}
 
 // ---------- generic app toast (export/import feedback, etc.) ----------
 // Visually identical to the Pomodoro toast but kept separate since that
@@ -44,21 +136,61 @@ function showAppToast(title, body) {
   _appToastTimer = setTimeout(() => toast.classList.remove('visible'), 4000);
 }
 
+
 // ---------- clock ----------
+// Optimised: minute-by-minute updates (clock only shows HH:MM, no seconds)
+// instead of every second; skips DOM writes when displayed value hasn't
+// changed; auto-pauses when the tab is hidden, then resyncs on focus.
+const _clockEls = {
+  time: document.getElementById('time'),
+  ampm: document.getElementById('ampm'),
+  date: document.getElementById('date')
+};
+let _clockLast = { time: '', ampm: '', date: '' };
+let _clockTimer = null;
+
 function tickClock() {
   const now = new Date();
   let h = now.getHours();
   const m = now.getMinutes().toString().padStart(2, '0');
   const ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12; if (h === 0) h = 12;
-  document.getElementById('time').textContent = `${h}:${m}`;
-  document.getElementById('ampm').textContent = ampm;
-
+  const hStr = h.toString().padStart(2, '0');
+  const timeStr = `${hStr}:${m}`;
   const dateStr = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  document.getElementById('date').textContent = dateStr;
+
+  if (timeStr !== _clockLast.time) { _clockEls.time.textContent = timeStr; _clockLast.time = timeStr; }
+  if (ampm    !== _clockLast.ampm) { _clockEls.ampm.textContent = ampm;    _clockLast.ampm = ampm; }
+  if (dateStr !== _clockLast.date) { _clockEls.date.textContent = dateStr; _clockLast.date = dateStr; }
 }
+
+// Schedule the next tick to land exactly on the next minute boundary,
+// so the displayed minute is never up to ~1s late.
+function scheduleClock() {
+  if (_clockTimer) { clearTimeout(_clockTimer); _clockTimer = null; }
+  if (document.visibilityState === 'hidden') return; // don't run while backgrounded
+  const now = Date.now();
+  const msToNextMinute = 60000 - (now % 60000);
+  _clockTimer = setTimeout(() => {
+    tickClock();
+    scheduleClock();
+  }, msToNextMinute + 30); // tiny offset so we're just past the boundary
+}
+
 tickClock();
-setInterval(tickClock, 1000);
+scheduleClock();
+
+// Resync immediately when the tab regains visibility so the clock isn't
+// stuck on a stale minute after the user comes back.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    tickClock();
+    scheduleClock();
+  } else if (_clockTimer) {
+    clearTimeout(_clockTimer);
+    _clockTimer = null;
+  }
+});
 
 // ---------- favicon helper ----------
 function faviconUrl(url) {
@@ -92,23 +224,41 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Cache the flattened bookmark list so reopening the drawer doesn't
+// re-traverse the whole tree every time. Invalidated by chrome.bookmarks
+// change events (added below) so it stays in sync if the user edits
+// bookmarks elsewhere.
+let _bookmarksCache = null;
+function _invalidateBookmarksCache() { _bookmarksCache = null; }
+if (window.chrome && chrome.bookmarks) {
+  ['onCreated','onRemoved','onChanged','onMoved','onChildrenReordered','onImportEnded']
+    .forEach(evt => {
+      if (chrome.bookmarks[evt] && chrome.bookmarks[evt].addListener) {
+        try { chrome.bookmarks[evt].addListener(_invalidateBookmarksCache); } catch (e) {}
+      }
+    });
+}
+
 async function loadBookmarks() {
-  bookmarksList.innerHTML = '';
+  // Render cached list immediately if we have one (avoids a flash of
+  // empty drawer); refresh in the background.
+  if (_bookmarksCache) {
+    renderBookmarksList(_bookmarksCache);
+  } else {
+    bookmarksList.innerHTML = '';
+  }
 
   if (window.chrome && chrome.bookmarks && chrome.bookmarks.getTree) {
     chrome.bookmarks.getTree((tree) => {
       const flat = [];
       function traverse(nodes) {
-        nodes.forEach(node => {
-          if (node.url) {
-            flat.push(node);
-          }
-          if (node.children) {
-            traverse(node.children);
-          }
-        });
+        for (const node of nodes) {
+          if (node.url) flat.push(node);
+          if (node.children) traverse(node.children);
+        }
       }
       traverse(tree);
+      _bookmarksCache = flat;
       renderBookmarksList(flat);
     });
   } else {
@@ -178,6 +328,33 @@ const taskInput = document.getElementById('taskInput');
 const taskList = document.getElementById('taskList');
 const taskCount = document.getElementById('taskCount');
 
+// Tasks use incremental rendering: toggling "done" or deleting a single
+// task no longer rebuilds the entire list (which used to discard and
+// re-create every DOM node on every click). Each .task-item carries its
+// own data-task-id, and event handlers act on the matching record in the
+// stored array — the DOM only mutates the affected row.
+function _makeTaskRow(task) {
+  const li = document.createElement('li');
+  li.className = 'task-item';
+  li.dataset.taskId = task.id;
+
+  const check = document.createElement('div');
+  check.className = 'task-check' + (task.done ? ' done' : '');
+
+  const text = document.createElement('span');
+  text.className = 'task-text' + (task.done ? ' done' : '');
+  text.textContent = task.text;
+
+  const del = document.createElement('span');
+  del.className = 'task-del';
+  del.textContent = '×';
+
+  li.appendChild(check);
+  li.appendChild(text);
+  li.appendChild(del);
+  return li;
+}
+
 function renderTasks(tasks) {
   taskList.innerHTML = '';
   if (tasks.length === 0) {
@@ -185,41 +362,11 @@ function renderTasks(tasks) {
     empty.className = 'task-empty';
     empty.textContent = 'Nothing yet.';
     taskList.appendChild(empty);
+    return;
   }
-  tasks.forEach((task, idx) => {
-    const li = document.createElement('li');
-    li.className = 'task-item';
-
-    const check = document.createElement('div');
-    check.className = 'task-check' + (task.done ? ' done' : '');
-    check.addEventListener('click', async () => {
-      const current = await store.get('tasks', []);
-      current[idx].done = !current[idx].done;
-      await store.set('tasks', current);
-      renderTasks(current);
-      updateCount(current);
-    });
-
-    const text = document.createElement('span');
-    text.className = 'task-text' + (task.done ? ' done' : '');
-    text.textContent = task.text;
-
-    const del = document.createElement('span');
-    del.className = 'task-del';
-    del.textContent = '×';
-    del.addEventListener('click', async () => {
-      const current = await store.get('tasks', []);
-      current.splice(idx, 1);
-      await store.set('tasks', current);
-      renderTasks(current);
-      updateCount(current);
-    });
-
-    li.appendChild(check);
-    li.appendChild(text);
-    li.appendChild(del);
-    taskList.appendChild(li);
-  });
+  const frag = document.createDocumentFragment();
+  for (const task of tasks) frag.appendChild(_makeTaskRow(task));
+  taskList.appendChild(frag);
 }
 
 function updateCount(tasks) {
@@ -227,51 +374,215 @@ function updateCount(tasks) {
   taskCount.textContent = `${left} left`;
 }
 
+// Ensure every task has a stable id; older saved data was index-keyed.
+function _ensureTaskIds(tasks) {
+  let dirty = false;
+  for (const t of tasks) {
+    if (!t.id) {
+      t.id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      dirty = true;
+    }
+  }
+  return dirty;
+}
+
 async function initTasks() {
   const tasks = await store.get('tasks', []);
+  if (_ensureTaskIds(tasks)) await store.set('tasks', tasks);
   renderTasks(tasks);
   updateCount(tasks);
 }
 initTasks();
+
+// One delegated click listener on the whole list handles both the
+// checkbox and the × delete button — no per-row listeners to attach.
+taskList.addEventListener('click', async (e) => {
+  const row = e.target.closest('.task-item');
+  if (!row) return;
+  const id = row.dataset.taskId;
+  const tasks = await store.get('tasks', []);
+  const idx = tasks.findIndex(t => t.id === id);
+  if (idx === -1) return;
+
+  if (e.target.classList.contains('task-check')) {
+    tasks[idx].done = !tasks[idx].done;
+    await store.set('tasks', tasks);
+    // Just toggle the two affected classes — no rebuild.
+    e.target.classList.toggle('done', tasks[idx].done);
+    const textEl = row.querySelector('.task-text');
+    if (textEl) textEl.classList.toggle('done', tasks[idx].done);
+    updateCount(tasks);
+    return;
+  }
+  if (e.target.classList.contains('task-del')) {
+    tasks.splice(idx, 1);
+    await store.set('tasks', tasks);
+    row.remove();
+    if (tasks.length === 0) renderTasks(tasks); // shows the "Nothing yet" placeholder
+    updateCount(tasks);
+  }
+});
 
 taskInput.addEventListener('keydown', async (e) => {
   if (e.key !== 'Enter') return;
   const text = taskInput.value.trim();
   if (!text) return;
   const current = await store.get('tasks', []);
-  current.push({ text, done: false });
+  const newTask = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+    text, done: false
+  };
+  current.push(newTask);
   await store.set('tasks', current);
   taskInput.value = '';
-  renderTasks(current);
+  // Append-only update if there are existing rows, otherwise re-render
+  // to drop the empty-state placeholder.
+  if (taskList.querySelector('.task-item')) {
+    taskList.appendChild(_makeTaskRow(newTask));
+  } else {
+    renderTasks(current);
+  }
   updateCount(current);
 });
 
 // ---------- theme ----------
 const themeToggle = document.getElementById('themeToggle');
-const themeIcon = document.getElementById('themeIcon');
 
+// Indigo is a solid-panel overlay on top of whichever base theme
+// (dark/light) is active — NOT a third value of data-theme. It's its
+// own attribute (data-indigo) so toggling it never touches or forgets
+// the underlying dark/light choice. Persisted separately for the same
+// reason: 'theme' always holds the true dark/light preference even
+// while indigo is currently showing on top of it.
+//   - Left-click:  toggle dark <-> light (unchanged from before; if
+//                  indigo happens to be on, this does NOT touch it)
+//   - Right-click: toggle indigo on/off, base theme untouched
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
-  // sun for light, moon for dark
-  if (theme === 'light') {
-    themeIcon.innerHTML = '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>';
+  updateThemeIcons();
+}
+
+function applyIndigo(enabled) {
+  if (enabled) {
+    document.documentElement.setAttribute('data-indigo', 'true');
   } else {
-    themeIcon.innerHTML = '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>';
+    document.documentElement.removeAttribute('data-indigo');
   }
+  updateThemeIcons();
+  document.dispatchEvent(new CustomEvent('flashdash:indigochange', {
+    detail: { enabled }
+  }));
+}
+
+// Icon always reflects the underlying dark/light state, not indigo —
+// indigo is a visual overlay, not a separate identity in the toggle's
+// own iconography. There are two instances (dock + full sidebar).
+function updateThemeIcons() {
+  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  const icons = document.querySelectorAll('.theme-icon-svg');
+  const html = theme === 'light'
+    ? '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'
+    : '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>';
+  icons.forEach(icon => { icon.innerHTML = html; });
 }
 
 async function initTheme() {
   const theme = await store.get('theme', 'dark');
+  const indigoEnabled = await store.get('indigoEnabled', false);
   applyTheme(theme);
+  applyIndigo(indigoEnabled);
 }
 initTheme();
 
+// Left-click: dark <-> light, exactly as before. While indigo is on,
+// this still flips the underlying preference but does NOT turn indigo
+// off — per spec, only a click ON the indigo-active button exits it,
+// and left-click while indigo is active means "leave indigo, reveal
+// whatever dark/light was already set" rather than "flip + leave".
 themeToggle.addEventListener('click', async () => {
+  const indigoEnabled = document.documentElement.getAttribute('data-indigo') === 'true';
+  if (indigoEnabled) {
+    // Exit indigo, reveal the underlying theme as-is — no flip.
+    applyIndigo(false);
+    await store.set('indigoEnabled', false);
+    return;
+  }
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
   const next = current === 'dark' ? 'light' : 'dark';
   applyTheme(next);
   await store.set('theme', next);
 });
+
+// Right-click: toggle indigo on/off, base theme preference untouched.
+themeToggle.addEventListener('contextmenu', async (e) => {
+  e.preventDefault();
+  const indigoEnabled = document.documentElement.getAttribute('data-indigo') === 'true';
+  const next = !indigoEnabled;
+  applyIndigo(next);
+  await store.set('indigoEnabled', next);
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// Left Navigation — Sidebar (two-level)
+// ──────────────────────────────────────────────────────────────
+// Level 1 (.sidebar-dock) is the always-visible compact pill: the
+// hamburger toggle plus the most-used actions (Sites, Add Note, Theme,
+// Clear Dashboard) as real buttons.
+// Level 2 (.sidebar-panel) is the full slide-out icon grid for the
+// remaining actions (Add Image, Bookmarks, Pomodoro, Countdown) —
+// actions already reachable from the dock are intentionally left out
+// so nothing is duplicated. See the "Toolbar Layout Logic" comment
+// above #sidebarList in newtab.html for how the icon grid itself works.
+// While the panel is open, the dock fades out (the hamburger included)
+// so the panel doesn't render on top of it — there is only ever one
+// set of icons visible at a time. The panel's own back arrow (◂) is
+// the "go back to the compact dock" control, not a modal-style close.
+// ══════════════════════════════════════════════════════════════
+(function initSidebar() {
+  const dock = document.getElementById('sidebarDock');
+  const toggleBtn = document.getElementById('sidebarToggleBtn');
+  const panel = document.getElementById('sidebarPanel');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  const backBtn = document.getElementById('sidebarBackBtn');
+
+  function setOpen(open) {
+    panel.classList.toggle('open', open);
+    backdrop.classList.toggle('open', open);
+    toggleBtn.classList.toggle('active', open);
+    dock.classList.toggle('collapsed-mode', open);
+    store.set('sidebarOpen', open);
+  }
+
+  function isOpen() {
+    return panel.classList.contains('open');
+  }
+
+  toggleBtn.addEventListener('click', () => setOpen(!isOpen()));
+  backBtn.addEventListener('click', () => setOpen(false));
+  backdrop.addEventListener('click', () => setOpen(false));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isOpen()) setOpen(false);
+  });
+
+  // Icon buttons in the expanded panel still need it to close once
+  // their action is performed — their own handlers (registered
+  // elsewhere) run first, this just adds the "go back to the dock
+  // afterwards" behavior on top.
+  const panelActionIds = ['addPhotoBtn', 'bookmarksToggle', 'pomodoroToggleBtn', 'countdownToggleBtn'];
+  panelActionIds.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', () => setOpen(false));
+  });
+
+  (async function init() {
+    const open = await store.get('sidebarOpen', false);
+    setOpen(open);
+  })();
+})();
+
 
 // ---------- Gallery of Goals (Glassmorphic Polaroid) + Sticky Notes ----------
 const board = document.getElementById('board');
@@ -284,13 +595,15 @@ const clearPhotosBtn = document.getElementById('clearPhotosBtn');
 // consistently no matter what kind of item the user last touched.
 let _boardZCounter = 10;
 
+// rAF-batched drag: pointermove events fire ~120-1000Hz on modern mice/
+// trackpads. Writing style.left/top synchronously on every event causes
+// layout thrashing and dropped frames; instead we coalesce multiple
+// moves into one paint per frame.
 function makeDraggable(el, item, onChange) {
   el.addEventListener('pointerdown', (e) => {
     // Skip drag-start for anything interactive — buttons, inputs, editable
     // text — so clicks on controls inside a draggable card/photo/note still
     // register normally instead of being swallowed by the drag handler.
-    // (.del/.resize/etc. are kept explicitly for clarity/back-compat even
-    // though the generic checks below already cover them.)
     if (
       e.target.closest('.del') || e.target.closest('.resize') ||
       e.target.closest('.note-text') || e.target.closest('.note-dot') ||
@@ -304,21 +617,33 @@ function makeDraggable(el, item, onChange) {
     el.setPointerCapture(e.pointerId);
     el.style.cursor = 'grabbing';
 
+    let pendingX = item.x, pendingY = item.y;
+    let rafId = 0;
+    const flush = () => {
+      rafId = 0;
+      el.style.left = pendingX + 'px';
+      el.style.top  = pendingY + 'px';
+    };
+
     function move(ev) {
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      item.x = origX + dx;
-      item.y = origY + dy;
-      el.style.left = item.x + 'px';
-      el.style.top = item.y + 'px';
+      pendingX = origX + dx;
+      pendingY = origY + dy;
+      item.x = pendingX;
+      item.y = pendingY;
+      if (!rafId) rafId = requestAnimationFrame(flush);
     }
     function up() {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (rafId) { cancelAnimationFrame(rafId); flush(); }
       el.style.cursor = 'grab';
       onChange();
     }
-    el.addEventListener('pointermove', move);
+    el.addEventListener('pointermove', move, { passive: true });
     el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
   });
 }
 
@@ -330,20 +655,32 @@ function makeResizable(el, handle, item, onChange, minW = 120, minH = 150) {
     const origW = item.w, origH = item.h;
     handle.setPointerCapture(e.pointerId);
 
+    let pendingW = item.w, pendingH = item.h;
+    let rafId = 0;
+    const flush = () => {
+      rafId = 0;
+      el.style.width  = pendingW + 'px';
+      el.style.height = pendingH + 'px';
+    };
+
     function move(ev) {
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      item.w = Math.max(minW, origW + dx);
-      item.h = Math.max(minH, origH + dy);
-      el.style.width = item.w + 'px';
-      el.style.height = item.h + 'px';
+      pendingW = Math.max(minW, origW + dx);
+      pendingH = Math.max(minH, origH + dy);
+      item.w = pendingW;
+      item.h = pendingH;
+      if (!rafId) rafId = requestAnimationFrame(flush);
     }
     function up() {
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      if (rafId) { cancelAnimationFrame(rafId); flush(); }
       onChange();
     }
-    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointermove', move, { passive: true });
     handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
   });
 }
 
@@ -379,7 +716,35 @@ function pickPlacement(anchors, w, h) {
   return { x, y };
 }
 
-function renderPhotoEl(photo) {
+// Track object URLs we mint for photo <img> tags so we can revoke them
+// when the photo (or the whole board) is torn down. Without this, every
+// re-render leaks blob: URLs and slowly grows browser memory.
+const _photoObjectUrls = new Map(); // photo.id -> objectURL
+
+function _revokePhotoUrl(id) {
+  const url = _photoObjectUrls.get(id);
+  if (url) { URL.revokeObjectURL(url); _photoObjectUrls.delete(id); }
+}
+
+// Resolve a photo's image src: prefers IndexedDB blob (new format),
+// falls back to inline data-URL still embedded in the photo record
+// (pre-migration data).
+async function _resolvePhotoSrc(photo) {
+  // Already-known object URL for this id
+  const cached = _photoObjectUrls.get(photo.id);
+  if (cached) return cached;
+
+  const blob = await mediaStore.getPhoto(photo.id);
+  if (blob) {
+    const url = URL.createObjectURL(blob);
+    _photoObjectUrls.set(photo.id, url);
+    return url;
+  }
+  // Legacy fallback (shouldn't normally hit after migration runs)
+  return photo.src || '';
+}
+
+async function renderPhotoEl(photo) {
   const wrap = document.createElement('div');
   wrap.className = 'photo';
   wrap.style.left = photo.x + 'px';
@@ -393,7 +758,9 @@ function renderPhotoEl(photo) {
   if (savedZ > _boardZCounter) _boardZCounter = savedZ;
 
   const img = document.createElement('img');
-  img.src = photo.src;
+  img.decoding = 'async';     // don't block layout while the bitmap decodes
+  img.loading = 'lazy';       // skip decode work for off-screen photos
+  img.src = await _resolvePhotoSrc(photo);
   wrap.appendChild(img);
 
   const del = document.createElement('div');
@@ -403,6 +770,8 @@ function renderPhotoEl(photo) {
     const photos = await store.get('photos', []);
     const filtered = photos.filter(p => p.id !== photo.id);
     await store.set('photos', filtered);
+    await mediaStore.deletePhoto(photo.id);
+    _revokePhotoUrl(photo.id);
     wrap.remove();
   });
   wrap.appendChild(del);
@@ -426,18 +795,54 @@ function renderPhotoEl(photo) {
   makeResizable(wrap, resize, photo, persist);
 }
 
+// One-time migration: if the saved photos array still contains inline
+// `src` data-URLs (the pre-IndexedDB format), move each blob into the
+// new photos object store and strip `src` from the JSON. Runs once;
+// subsequent loads skip straight through it because no photo still has
+// a data-URL src.
+async function _migratePhotosToIDB(photos) {
+  if (!Array.isArray(photos) || photos.length === 0) return photos;
+  const stale = photos.filter(p => p && typeof p.src === 'string' && p.src.startsWith('data:'));
+  if (stale.length === 0) return photos;
+
+  for (const p of stale) {
+    const blob = dataUrlToBlob(p.src);
+    if (blob) {
+      await mediaStore.setPhoto(p.id, blob);
+    }
+    delete p.src; // drop the heavy string from chrome.storage forever
+  }
+  await store.set('photos', photos);
+  return photos;
+}
+
 async function renderBoard() {
-  const [photos, notes] = await Promise.all([
+  let [photos, notes] = await Promise.all([
     store.get('photos', []),
     store.get('notes', [])
   ]);
+
+  // Migrate-on-load (no-op after the first run).
+  photos = await _migratePhotosToIDB(photos);
+
+  // Revoke any previously-minted object URLs before wiping the board,
+  // otherwise re-rendering accumulates blob refs in browser memory.
+  for (const id of _photoObjectUrls.keys()) _revokePhotoUrl(id);
+
   board.innerHTML = '';
-  photos.forEach(renderPhotoEl);
+  // Render photos sequentially-but-non-blocking: each awaits its own
+  // blob, but we don't block on Promise.all so the first photos paint
+  // as soon as their data is ready.
+  for (const p of photos) renderPhotoEl(p);
   notes.forEach(renderNoteEl);
 }
 renderBoard();
 
 // ── shared "add photos" pipeline used by both the file picker and drag-drop ──
+// Stores image data as Blobs in IndexedDB (under each photo's id) and keeps
+// only lightweight metadata (id/x/y/w/h/z) in chrome.storage.local. Roughly
+// 33% smaller on disk than the old base64 path and dramatically faster to
+// load on subsequent page opens.
 async function addPhotoFiles(files) {
   const imageFiles = [...files].filter(f => f.type.startsWith('image/'));
   if (imageFiles.length === 0) return;
@@ -451,21 +856,13 @@ async function addPhotoFiles(files) {
   const w = 220, h = 220;
 
   for (const file of imageFiles) {
-    const dataUrl = await new Promise((res) => {
-      const reader = new FileReader();
-      reader.onload = () => res(reader.result);
-      reader.readAsDataURL(file);
-    });
-
     const { x, y } = pickPlacement(existingSnapshot, w, h);
-
     _boardZCounter += 1;
-    const photo = {
-      id: Date.now() + Math.random().toString(36).slice(2),
-      src: dataUrl,
-      x, y, w, h,
-      z: _boardZCounter
-    };
+    const id = Date.now() + Math.random().toString(36).slice(2);
+    // The file object is already a Blob — store it directly; no FileReader,
+    // no base64 round-trip, no decoding cost on the next page load.
+    await mediaStore.setPhoto(id, file);
+    const photo = { id, x, y, w, h, z: _boardZCounter };
     photos.push(photo);
     existingSnapshot.push(photo);
   }
@@ -492,7 +889,14 @@ clearPhotosBtn.addEventListener('click', async () => {
   const confirmed = confirm(`Remove all ${total} item${total === 1 ? '' : 's'} (photos & notes) from the board?`);
   if (!confirmed) return;
 
-  await Promise.all([store.set('photos', []), store.set('notes', [])]);
+  // Also wipe blob storage so we don't leak orphan blobs in IndexedDB,
+  // and revoke any currently-minted object URLs.
+  await Promise.all([
+    store.set('photos', []),
+    store.set('notes', []),
+    mediaStore.clearPhotos()
+  ]);
+  for (const id of _photoObjectUrls.keys()) _revokePhotoUrl(id);
   renderBoard();
 });
 
@@ -923,6 +1327,11 @@ siteDialogSave.addEventListener('click', async () => {
   function applyTasksVisibility() {
     tasksCard.style.display = settings.tasksVisible ? '' : 'none';
     toggleTasksBtn.setAttribute('aria-checked', String(settings.tasksVisible));
+    // Lets other modules (e.g. clock position, which can only go to the
+    // right while Tasks is hidden) react without polling storage.
+    document.dispatchEvent(new CustomEvent('flashdash:tasksvisibility', {
+      detail: { visible: settings.tasksVisible }
+    }));
   }
 
   function applySearchVisibility() {
@@ -1156,15 +1565,40 @@ siteDialogSave.addEventListener('click', async () => {
   }
 
   // ── Google autocomplete (fetch-based, CSP-compliant for MV3) ──
+  // Optimisations vs. the original:
+  //   1. Small LRU-style Map cache so repeating a query doesn't refetch.
+  //   2. AbortController on the previous request, so fast typers don't end
+  //      up with stale responses racing each other to render.
+  const _suggestCache = new Map();
+  const _SUGGEST_CACHE_MAX = 30;
+  let _suggestAbort = null;
   function fetchGoogleSuggestions(query) {
+    if (_suggestCache.has(query)) {
+      // Refresh recency by re-inserting.
+      const v = _suggestCache.get(query);
+      _suggestCache.delete(query);
+      _suggestCache.set(query, v);
+      return Promise.resolve(v);
+    }
     // Use client=firefox to get a plain JSON array response (no JSONP needed).
     // This avoids dynamic <script> injection which is blocked by MV3 CSP.
     const url = `https://suggestqueries.google.com/complete/search?client=firefox&q=${encodeURIComponent(query)}`;
-    return fetch(url)
+
+    if (_suggestAbort) { try { _suggestAbort.abort(); } catch (e) {} }
+    _suggestAbort = new AbortController();
+    const signal = _suggestAbort.signal;
+
+    return fetch(url, { signal })
       .then(r => r.json())
       .then(data => {
-        // Response format: [query, [suggestions]]
-        return Array.isArray(data) && Array.isArray(data[1]) ? data[1].slice(0, 6) : [];
+        const out = Array.isArray(data) && Array.isArray(data[1]) ? data[1].slice(0, 6) : [];
+        _suggestCache.set(query, out);
+        if (_suggestCache.size > _SUGGEST_CACHE_MAX) {
+          // Drop the oldest entry (Map iteration order is insertion order).
+          const firstKey = _suggestCache.keys().next().value;
+          _suggestCache.delete(firstKey);
+        }
+        return out;
       })
       .catch(() => []);
   }
@@ -1699,8 +2133,10 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
   render();
 
   // Recompute periodically so "days left" rolls over at midnight without
-  // needing a reload — cheap to check every minute since it's just a diff.
-  setInterval(render, 60 * 1000);
+  // needing a reload. 5 minutes is plenty — visibilitychange + focus below
+  // also fire on tab re-entry, so any midnight rollover is caught the
+  // moment the user looks at the tab. Cuts background timer work 5×.
+  setInterval(render, 5 * 60 * 1000);
 
   // Also recompute the instant the tab regains visibility/focus, which
   // catches day-rollovers that happened while the tab sat in the background.
@@ -1875,6 +2311,12 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
     showToast(title, body);
   }
 
+  // Cache last-rendered values so a tick that doesn't change the
+  // displayed time/ring/button skips DOM writes entirely.
+  let _lastTimeStr = '';
+  let _lastDashoffset = '';
+  let _lastBtnLabel = '';
+
   function renderTick() {
     let remaining = remainingSeconds();
 
@@ -1885,14 +2327,29 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
       return;
     }
 
-    timeEl.textContent = formatTime(remaining);
+    const timeStr = formatTime(remaining);
+    if (timeStr !== _lastTimeStr) {
+      timeEl.textContent = timeStr;
+      _lastTimeStr = timeStr;
+    }
     const fraction = Math.min(1, Math.max(0, 1 - remaining / state.duration));
-    ringProgress.style.strokeDashoffset = (RING_CIRCUMFERENCE * fraction).toFixed(2);
-    startPauseBtn.textContent = state.running ? 'Pause' : 'Start';
+    const dash = (RING_CIRCUMFERENCE * fraction).toFixed(2);
+    if (dash !== _lastDashoffset) {
+      ringProgress.style.strokeDashoffset = dash;
+      _lastDashoffset = dash;
+    }
+    const btnLabel = state.running ? 'Pause' : 'Start';
+    if (btnLabel !== _lastBtnLabel) {
+      startPauseBtn.textContent = btnLabel;
+      _lastBtnLabel = btnLabel;
+    }
   }
 
   function startTicking() {
     stopTicking();
+    // No display-refresh interval while the tab is backgrounded —
+    // remainingSeconds() is wall-clock based so it'll catch up on resume.
+    if (document.visibilityState === 'hidden') return;
     // setInterval here only drives the *display* refresh; the actual
     // remaining-time math always comes from remainingSeconds() above.
     tickHandle = setInterval(renderTick, 1000);
@@ -1992,12 +2449,1002 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
 
   // Catch up instantly when the tab regains focus, rather than waiting
   // for the next 1s tick — keeps multi-tab usage feeling immediate.
+  // Also restart/stop the interval to avoid spending CPU on a hidden tab.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state) renderTick();
+    if (!state) return;
+    if (document.visibilityState === 'visible') {
+      renderTick();
+      if (state.running) startTicking();
+    } else {
+      stopTicking();
+    }
   });
 
   // Make this card a draggable, hideable floating widget.
   const closeWidgetBtn = document.getElementById('pomodoroCloseBtn');
   const toggleWidgetBtn = document.getElementById('pomodoroToggleBtn');
   initFloatingWidget('pomodoroWidget', card, toggleWidgetBtn, closeWidgetBtn, 240);
+})();
+
+
+// ════════════════════════════════════════════════════════════
+// Custom Background Feature
+// ────────────────────────────────────────────────────────────
+// Storage split:
+//   • bgMediaStore (IndexedDB) — raw Blob/File for the active background.
+//     Only one slot (\'current\'), replaced on every Apply.
+//   • store (\'backgroundSettings\') — small JSON object with
+//     { type, mimeType, position:{x,y}, blur:{enabled,amount},
+//       brightness, sound }.
+//     Consulted on page load to know whether a background is set at all
+//     without pulling the full blob out of IDB first.
+//
+// The live background element lives in #bgLayer (z-index:-1), behind
+// .bg-glow and the board.  When no background is set, #bgLayer is empty
+// and the plain var(--bg) on <body> shows as normal.
+// ════════════════════════════════════════════════════════════
+
+// Tracks the current object URL for the live background, so we can revoke
+// it before creating a new one (avoids memory leaks from orphaned blob URLs).
+let _bgObjectUrl = null;
+
+// Applies a background from an already-resolved object URL.
+// settings: the backgroundSettings object from store.
+// objectUrl: URL.createObjectURL() result for the blob.
+function applyBackground(settings, objectUrl) {
+  const layer = document.getElementById('bgLayer');
+  if (!layer) return;
+
+  // Clear previous media element
+  layer.innerHTML = '';
+
+  const pos = settings.position || { x: 50, y: 50 };
+  const blurPx = (settings.blur && settings.blur.enabled)
+    ? `blur(${settings.blur.amount || 0}px) ` : '';
+  const brightness = settings.brightness != null ? settings.brightness : 100;
+  const filterVal = `${blurPx}brightness(${brightness}%)`;
+  const objPos    = `${pos.x}% ${pos.y}%`;
+
+  let media;
+  if (settings.type === 'video') {
+    media = document.createElement('video');
+    media.autoplay = true;
+    media.loop     = true;
+    media.playsInline = true;
+    // Attempt sound if user requested it; browsers may block unmuted autoplay.
+    // We always start muted and then try to unmute, falling back gracefully.
+    media.muted = true;
+    media.src   = objectUrl;
+    if (settings.sound) {
+      // Try unmuting after the video can play; if the browser blocks it,
+      // it stays muted and we don't throw or show an error.
+      media.addEventListener('canplay', () => {
+        try {
+          media.muted = false;
+          media.play().catch(() => { media.muted = true; });
+        } catch (e) { media.muted = true; }
+      }, { once: true });
+    }
+
+  } else {
+    media = document.createElement('img');
+    media.alt = '';
+    media.src = objectUrl;
+  }
+
+  media.style.objectPosition = objPos;
+  media.style.filter = filterVal;
+  layer.appendChild(media);
+}
+
+// Global listener to pause the background video when the tab is hidden,
+// and resume it when visible. Reuses a single listener instead of stacking
+// them per-apply.
+document.addEventListener('visibilitychange', () => {
+  const media = document.querySelector('#bgLayer video');
+  if (media) {
+    if (document.visibilityState === 'hidden') {
+      media.pause();
+    } else {
+      media.play().catch(() => {}); // ignore DOMException if still blocked
+    }
+  }
+});
+
+// On page load: check if a background is configured and restore it.
+(async function initBackgroundOnLoad() {
+  const settings = await store.get('backgroundSettings', null);
+  if (!settings) return; // no custom background — nothing to do
+
+  const blob = await bgMediaStore.get();
+  if (!blob) {
+    // Settings key exists but blob was lost (e.g. IDB cleared) — clean up.
+    await store.remove('backgroundSettings');
+    return;
+  }
+
+  // Revoke any leftover URL from a previous load (shouldn\'t exist, but
+  // guard anyway to avoid accumulating blob references.
+  if (_bgObjectUrl) URL.revokeObjectURL(_bgObjectUrl);
+  _bgObjectUrl = URL.createObjectURL(blob);
+  applyBackground(settings, _bgObjectUrl);
+})();
+
+
+// ════════════════════════════════════════════════════════════
+// initBackground — Background Settings + Editor dialogs
+// ════════════════════════════════════════════════════════════
+(function initBackground() {
+
+  // ── Element references ──────────────────────────────────────────────
+  const settingsOpenBgBtn    = document.getElementById('settingsOpenBgBtn');
+  const settingsBackdrop     = document.getElementById('settingsBackdrop');
+
+  // Background Settings dialog
+  const bgSettingsBackdrop = document.getElementById('bgSettingsBackdrop');
+  const bgSettingsClose    = document.getElementById('bgSettingsClose');
+  const bgUploadPhotoBtn   = document.getElementById('bgUploadPhotoBtn');
+  const bgUploadVideoBtn   = document.getElementById('bgUploadVideoBtn');
+  const bgResetBtn         = document.getElementById('bgResetBtn');
+  const bgPhotoInput       = document.getElementById('bgPhotoInput');
+  const bgVideoInput       = document.getElementById('bgVideoInput');
+
+  // Background Editor dialog
+  const bgEditorBackdrop    = document.getElementById('bgEditorBackdrop');
+  const bgEditorClose       = document.getElementById('bgEditorClose');
+  const bgPreviewFrame      = document.getElementById('bgPreviewFrame');
+  const bgBlurToggle        = document.getElementById('bgBlurToggle');
+  const bgBlurSliderWrap    = document.getElementById('bgBlurSliderWrap');
+  const bgBlurSlider        = document.getElementById('bgBlurSlider');
+  const bgBlurLabel         = document.getElementById('bgBlurLabel');
+  const bgSoundToggle       = document.getElementById('bgSoundToggle');
+  const bgBrightnessSlider  = document.getElementById('bgBrightnessSlider');
+  const bgBrightnessLabel   = document.getElementById('bgBrightnessLabel');
+  const bgEditorCancel      = document.getElementById('bgEditorCancel');
+  const bgEditorApply       = document.getElementById('bgEditorApply');
+
+  if (!settingsOpenBgBtn || !bgSettingsBackdrop || !bgEditorBackdrop) return;
+
+  // ── Editor state for the current editing session ────────────────────
+  // Cleared/reset every time a new file is picked.
+  let _editorState = null;
+  /*
+    _editorState = {
+      file:         File,
+      type:         'photo' | 'video',
+      objectUrl:    string,        // URL.createObjectURL(file)
+      mediaEl:      HTMLElement,   // the <img> or <video> inside #bgPreviewFrame
+      panX:         number,        // 0–100 percent
+      panY:         number,        // 0–100 percent
+      blurEnabled:  boolean,
+      blurAmount:   number,        // px
+      brightness:   number,        // %
+      sound:        boolean
+    }
+  */
+
+  // ── Background Settings dialog helpers ──────────────────────────────
+  function openBgSettings() {
+    bgSettingsBackdrop.classList.add('open');
+    updateResetBtnState();
+  }
+  function closeBgSettings() {
+    bgSettingsBackdrop.classList.remove('open');
+  }
+
+  async function updateResetBtnState() {
+    const settings = await store.get('backgroundSettings', null);
+    bgResetBtn.disabled = !settings;
+  }
+
+  bgSettingsClose.addEventListener('click', closeBgSettings);
+  bgSettingsBackdrop.addEventListener('click', e => {
+    if (e.target === bgSettingsBackdrop) closeBgSettings();
+  });
+
+  // "Customize…" in the Settings menu: close Settings, open BgSettings
+  settingsOpenBgBtn.addEventListener('click', () => {
+    settingsBackdrop.classList.remove('open');
+    openBgSettings();
+  });
+
+  // Upload buttons trigger the hidden file inputs
+  bgUploadPhotoBtn.addEventListener('click', () => bgPhotoInput.click());
+  bgUploadVideoBtn.addEventListener('click', () => bgVideoInput.click());
+
+  bgPhotoInput.addEventListener('change', () => {
+    const file = bgPhotoInput.files && bgPhotoInput.files[0];
+    bgPhotoInput.value = ''; // allow re-picking same file
+    if (file) openEditor(file, 'photo');
+  });
+
+  bgVideoInput.addEventListener('change', () => {
+    const file = bgVideoInput.files && bgVideoInput.files[0];
+    bgVideoInput.value = '';
+    if (file) openEditor(file, 'video');
+  });
+
+  // ── Reset to Default ────────────────────────────────────────────────
+  bgResetBtn.addEventListener('click', async () => {
+    // Clear both storage locations
+    await Promise.all([
+      store.remove('backgroundSettings'),
+      bgMediaStore.clear()
+    ]);
+
+    // Remove live background layer content
+    const layer = document.getElementById('bgLayer');
+    if (layer) layer.innerHTML = '';
+
+    // Revoke the object URL that was in use
+    if (_bgObjectUrl) {
+      URL.revokeObjectURL(_bgObjectUrl);
+      _bgObjectUrl = null;
+    }
+
+    // Update button state and show feedback toast
+    bgResetBtn.disabled = true;
+    closeBgSettings();
+    showAppToast('Background Reset', 'Back to default.');
+  });
+
+  // ── Background Editor dialog ────────────────────────────────────────
+  function openEditor(file, type) {
+    // Close the background settings dialog while editor is open
+    closeBgSettings();
+
+    // Clean up any previous editor session
+    if (_editorState && _editorState.objectUrl) {
+      URL.revokeObjectURL(_editorState.objectUrl);
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+
+    _editorState = {
+      file,
+      type,
+      objectUrl,
+      mediaEl:     null,
+      panX:        50,
+      panY:        50,
+      blurEnabled: false,
+      blurAmount:  4,
+      brightness:  100,
+      sound:       false
+    };
+
+    // ── Build preview media element ──────────────────────────────
+    bgPreviewFrame.innerHTML = '';
+    const hint = document.createElement('div');
+    hint.className = 'bg-drag-hint';
+    hint.textContent = 'Drag to reposition';
+
+    let mediaEl;
+    if (type === 'video') {
+      mediaEl = document.createElement('video');
+      mediaEl.autoplay = true;
+      mediaEl.loop     = true;
+      mediaEl.muted    = true; // always muted inside the editor preview
+      mediaEl.playsInline = true;
+      mediaEl.src = objectUrl;
+    } else {
+      mediaEl = document.createElement('img');
+      mediaEl.alt = '';
+      mediaEl.src = objectUrl;
+    }
+    _editorState.mediaEl = mediaEl;
+
+    bgPreviewFrame.appendChild(mediaEl);
+    bgPreviewFrame.appendChild(hint);
+
+    // ── Set preview frame aspect ratio to the actual viewport ────
+    const vwRatio = window.innerWidth / window.innerHeight;
+    bgPreviewFrame.style.aspectRatio = `${window.innerWidth} / ${window.innerHeight}`;
+
+    // ── Reset controls to default state ─────────────────────────
+    bgBlurToggle.textContent = 'Blur: Off';
+    bgBlurToggle.classList.remove('active');
+    bgBlurToggle.setAttribute('aria-pressed', 'false');
+    bgBlurSliderWrap.classList.remove('visible');
+    bgBlurSlider.value = 4;
+    bgBlurLabel.textContent = '4px';
+
+    bgBrightnessSlider.value = 100;
+    bgBrightnessLabel.textContent = '100%';
+
+    bgSoundToggle.style.display = type === 'video' ? '' : 'none';
+    bgSoundToggle.textContent = 'Sound: Off';
+    bgSoundToggle.classList.remove('active');
+    bgSoundToggle.setAttribute('aria-pressed', 'false');
+
+    // Apply initial filter to preview
+    updatePreviewFilter();
+    updatePreviewPosition();
+
+    // Open the editor dialog
+    bgEditorBackdrop.classList.add('open');
+  }
+
+  function closeEditor() {
+    bgEditorBackdrop.classList.remove('open');
+    bgPreviewFrame.innerHTML = '';
+    if (_editorState && _editorState.objectUrl) {
+      URL.revokeObjectURL(_editorState.objectUrl);
+    }
+    _editorState = null;
+  }
+
+  function updatePreviewFilter() {
+    if (!_editorState || !_editorState.mediaEl) return;
+    const blurPart = _editorState.blurEnabled
+      ? `blur(${_editorState.blurAmount}px) ` : '';
+    _editorState.mediaEl.style.filter =
+      `${blurPart}brightness(${_editorState.brightness}%)`;
+  }
+
+  function updatePreviewPosition() {
+    if (!_editorState || !_editorState.mediaEl) return;
+    _editorState.mediaEl.style.objectPosition =
+      `${_editorState.panX}% ${_editorState.panY}%`;
+  }
+
+  // ── Pan gesture inside the preview frame ─────────────────────────────
+  // Pointer events are used (works for mouse and touch).
+  // Drag delta in pixels is converted to a change in the object-position
+  // percentage (inverted: dragging right moves the \'crop window\' left,
+  // i.e. the image appears to move right, which matches user expectation).
+  let _panDrag = null;
+
+  bgPreviewFrame.addEventListener('pointerdown', e => {
+    if (!_editorState) return;
+    e.preventDefault();
+    bgPreviewFrame.setPointerCapture(e.pointerId);
+    _panDrag = {
+      startX:  e.clientX,
+      startY:  e.clientY,
+      origPanX: _editorState.panX,
+      origPanY: _editorState.panY
+    };
+  });
+
+  bgPreviewFrame.addEventListener('pointermove', e => {
+    if (!_panDrag || !_editorState) return;
+    const frameW = bgPreviewFrame.offsetWidth;
+    const frameH = bgPreviewFrame.offsetHeight;
+
+    // Convert pixel drag distance to percentage offset.
+    // Dragging right by X pixels shifts panX by -(X / frameW * 100)%
+    // so the media appears to scroll in the natural direction.
+    const dxPct = ((_panDrag.startX - e.clientX) / frameW) * 100;
+    const dyPct = ((_panDrag.startY - e.clientY) / frameH) * 100;
+
+    _editorState.panX = Math.max(0, Math.min(100, _panDrag.origPanX + dxPct));
+    _editorState.panY = Math.max(0, Math.min(100, _panDrag.origPanY + dyPct));
+    updatePreviewPosition();
+  });
+
+  bgPreviewFrame.addEventListener('pointerup', () => { _panDrag = null; });
+  bgPreviewFrame.addEventListener('pointercancel', () => { _panDrag = null; });
+
+  // ── Blur toggle ───────────────────────────────────────────────────────
+  bgBlurToggle.addEventListener('click', () => {
+    if (!_editorState) return;
+    _editorState.blurEnabled = !_editorState.blurEnabled;
+    const on = _editorState.blurEnabled;
+    bgBlurToggle.textContent = on ? 'Blur: On' : 'Blur: Off';
+    bgBlurToggle.classList.toggle('active', on);
+    bgBlurToggle.setAttribute('aria-pressed', String(on));
+    bgBlurSliderWrap.classList.toggle('visible', on);
+    updatePreviewFilter();
+  });
+
+  bgBlurSlider.addEventListener('input', () => {
+    if (!_editorState) return;
+    _editorState.blurAmount = parseFloat(bgBlurSlider.value);
+    bgBlurLabel.textContent = `${_editorState.blurAmount}px`;
+    updatePreviewFilter();
+  });
+
+  // ── Brightness slider ──────────────────────────────────────────────────
+  bgBrightnessSlider.addEventListener('input', () => {
+    if (!_editorState) return;
+    _editorState.brightness = parseInt(bgBrightnessSlider.value, 10);
+    bgBrightnessLabel.textContent = `${_editorState.brightness}%`;
+    updatePreviewFilter();
+  });
+
+  // ── Sound toggle (video only) ─────────────────────────────────────────
+  bgSoundToggle.addEventListener('click', () => {
+    if (!_editorState) return;
+    _editorState.sound = !_editorState.sound;
+    const on = _editorState.sound;
+    bgSoundToggle.textContent = on ? 'Sound: On' : 'Sound: Off';
+    bgSoundToggle.classList.toggle('active', on);
+    bgSoundToggle.setAttribute('aria-pressed', String(on));
+  });
+
+  // ── Cancel ────────────────────────────────────────────────────────────
+  bgEditorClose.addEventListener('click', () => {
+    closeEditor();
+    openBgSettings(); // return to background settings dialog
+  });
+  bgEditorCancel.addEventListener('click', () => {
+    closeEditor();
+    openBgSettings();
+  });
+  bgEditorBackdrop.addEventListener('click', e => {
+    if (e.target === bgEditorBackdrop) {
+      closeEditor();
+      openBgSettings();
+    }
+  });
+
+  // ── Apply ────────────────────────────────────────────────────────────
+  bgEditorApply.addEventListener('click', async () => {
+    if (!_editorState) return;
+
+    const { file, type, panX, panY, blurEnabled, blurAmount, brightness, sound } = _editorState;
+
+    const settings = {
+      type,
+      mimeType:   file.type,
+      position:   { x: Math.round(panX * 10) / 10, y: Math.round(panY * 10) / 10 },
+      blur:       { enabled: blurEnabled, amount: blurAmount },
+      brightness,
+      sound:      type === 'video' ? sound : undefined
+    };
+
+    // Persist blob to IndexedDB (replaces any previous background)
+    await bgMediaStore.set(file);
+    // Persist settings object to chrome.storage.local
+    await store.set('backgroundSettings', settings);
+
+    // Build a fresh object URL for the live background layer.
+    // (Don\'t revoke _editorState.objectUrl here — closeEditor does that.)
+    if (_bgObjectUrl) URL.revokeObjectURL(_bgObjectUrl);
+    _bgObjectUrl = URL.createObjectURL(file);
+    applyBackground(settings, _bgObjectUrl);
+
+    // Close dialogs
+    closeEditor();
+    // Don\'t re-open bgSettings — Apply means \'done\'
+
+    // Update reset button state for next time the dialog opens
+    await updateResetBtnState();
+    showAppToast('Background Applied', 'Your new background is live.');
+  });
+
+  // ── Keyboard: Escape closes editor (falling through to settings) ──────
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (bgEditorBackdrop.classList.contains('open')) {
+      e.stopImmediatePropagation();
+      closeEditor();
+      openBgSettings();
+    } else if (bgSettingsBackdrop.classList.contains('open')) {
+      closeBgSettings();
+    }
+  });
+
+  // ── Init: sync reset button state on load ────────────────────────────
+  updateResetBtnState();
+
+})();
+
+
+// ════════════════════════════════════════════════════════════
+// initClockFont — "Modify Clock" typeface picker
+// ────────────────────────────────────────────────────────────
+// Persists a small settings object via `store` under 'clockFont':
+//   { id: 'default' | 'adventuro' | 'caesar' | 'bubble' | 'garamond'
+//         | 'minecraft' | 'redaction' | 'vintage' | 'custom' }
+// A custom upload additionally stores its base64 data URL and the
+// original filename in the same object — kept in chrome.storage.local
+// (not IndexedDB) since a single .ttf/.otf comfortably fits within
+// the unlimitedStorage-backed quota, and this mirrors how every other
+// small piece of app state already goes through `store`.
+//
+// Picking a tile applies immediately — there's no separate "Apply"
+// step here, unlike the Background editor, since there's no preview
+// positioning/cropping involved, just a direct font swap.
+// ════════════════════════════════════════════════════════════
+(function initClockFont() {
+
+  // ── Element references ──────────────────────────────────────────────
+  const settingsOpenClockFontBtn = document.getElementById('settingsOpenClockFontBtn');
+  const settingsBackdrop         = document.getElementById('settingsBackdrop');
+
+  const clockFontBackdrop  = document.getElementById('clockFontBackdrop');
+  const clockFontClose     = document.getElementById('clockFontClose');
+  const clockFontGrid      = document.getElementById('clockFontGrid');
+  const clockFontFileInput = document.getElementById('clockFontFileInput');
+  const removeRow          = document.getElementById('clockFontRemoveRow');
+  const removeBtn          = document.getElementById('clockFontRemoveBtn');
+
+  const clockTabTypeface      = document.getElementById('clockTabTypeface');
+  const clockTabOther         = document.getElementById('clockTabOther');
+  const clockTabPanelTypeface = document.getElementById('clockTabPanelTypeface');
+  const clockTabPanelOther    = document.getElementById('clockTabPanelOther');
+
+  if (!settingsOpenClockFontBtn || !clockFontBackdrop || !clockFontGrid) return;
+
+  // ── Tab switching (Typeface / Other Changes) ─────────────────────────
+  function switchClockTab(tab) {
+    const toOther = tab === 'other';
+    clockTabTypeface.classList.toggle('active', !toOther);
+    clockTabOther.classList.toggle('active', toOther);
+    clockTabTypeface.setAttribute('aria-selected', String(!toOther));
+    clockTabOther.setAttribute('aria-selected', String(toOther));
+    clockTabPanelTypeface.classList.toggle('active', !toOther);
+    clockTabPanelOther.classList.toggle('active', toOther);
+  }
+  if (clockTabTypeface && clockTabOther) {
+    clockTabTypeface.addEventListener('click', () => switchClockTab('typeface'));
+    clockTabOther.addEventListener('click', () => switchClockTab('other'));
+  }
+
+  // ── Font catalogue ───────────────────────────────────────────────────
+  // family: the CSS font-family name to apply (matches the @font-face
+  // declarations in style.css). weight: most bundled files are a single
+  // regular weight, so we drop to 400 for those rather than force a
+  // faux-bold synthesis the browser would otherwise apply.
+  const BUNDLED_FONTS = [
+    { id: 'adventuro', label: 'Adventuro', family: "'ClockFont-Adventuro'", weight: '400' },
+    { id: 'caesar',    label: 'Caesar',    family: "'ClockFont-Caesar'",    weight: '400' },
+    { id: 'bubble',    label: 'Bubble',    family: "'ClockFont-Bubble'",    weight: '400' },
+    { id: 'garamond',  label: 'Garamond',  family: "'ClockFont-Garamond'",  weight: '400' },
+    { id: 'minecraft', label: 'Minecraft', family: "'ClockFont-Minecraft'", weight: '400' },
+    { id: 'redaction', label: 'Redaction', family: "'ClockFont-Redaction'", weight: '400' },
+    { id: 'vintage',   label: 'Vintage',   family: "'ClockFont-Vintage'",  weight: '400' },
+  ];
+  const DEFAULT_FONT = { id: 'default', family: "'Space Grotesk', sans-serif", weight: '700' };
+  const CUSTOM_FONT_FAMILY = 'ClockFont-Custom'; // registered dynamically via FontFace API
+
+  let currentId = 'default';
+  let customMeta = null; // { dataUrl, fileName } when a custom font is stored
+  let customFontFace = null; // the registered FontFace instance, once loaded
+
+  // ── Apply a font to the live clock (CSS variables on <html>) ────────
+  function applyToClock(family, weight) {
+    document.documentElement.style.setProperty('--clock-font', family);
+    document.documentElement.style.setProperty('--clock-font-weight', weight);
+  }
+
+  // ── Register a custom font's base64 data with the FontFace API ──────
+  // Returns true on success, false if the file couldn't be parsed as a
+  // valid font (e.g. user picked a corrupt or non-font file).
+  async function registerCustomFont(dataUrl) {
+    try {
+      if (customFontFace) {
+        document.fonts.delete(customFontFace);
+        customFontFace = null;
+      }
+      const face = new FontFace(CUSTOM_FONT_FAMILY, `url(${dataUrl})`);
+      await face.load();
+      document.fonts.add(face);
+      customFontFace = face;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // ── Build the 9 tiles: Default, 7 bundled, Custom ────────────────────
+  function renderGrid() {
+    clockFontGrid.innerHTML = '';
+
+    const tiles = [
+      { id: 'default', label: 'Default', family: DEFAULT_FONT.family, weight: DEFAULT_FONT.weight },
+      ...BUNDLED_FONTS,
+    ];
+
+    tiles.forEach(t => {
+      const tile = document.createElement('button');
+      tile.className = 'clock-font-tile';
+      tile.type = 'button';
+      tile.dataset.fontId = t.id;
+      if (t.id === currentId) tile.classList.add('active');
+
+      const sample = document.createElement('span');
+      sample.className = 'clock-font-sample';
+      sample.style.fontFamily = t.family;
+      sample.style.fontWeight = t.weight;
+      sample.textContent = '07:24';
+
+      const label = document.createElement('span');
+      label.className = 'clock-font-tile-label';
+      label.textContent = t.label;
+
+      tile.appendChild(sample);
+      tile.appendChild(label);
+      tile.addEventListener('click', () => selectFont(t.id, t.family, t.weight));
+
+      clockFontGrid.appendChild(tile);
+    });
+
+    // Custom tile — appended last, always
+    const customTile = document.createElement('button');
+    customTile.className = 'clock-font-tile clock-font-tile-custom';
+    customTile.type = 'button';
+    customTile.dataset.fontId = 'custom';
+    if (currentId === 'custom' && customMeta) customTile.classList.add('active', 'has-font');
+
+    const customSample = document.createElement('span');
+    customSample.className = 'clock-font-sample';
+
+    const customLabel = document.createElement('span');
+    customLabel.className = 'clock-font-tile-label';
+
+    if (customMeta) {
+      // A custom font is already stored — preview it in its own face,
+      // label shows the original filename (trimmed).
+      customSample.style.fontFamily = `'${CUSTOM_FONT_FAMILY}'`;
+      customSample.textContent = '07:24';
+      customLabel.textContent = customMeta.fileName || 'Custom';
+    } else {
+      customSample.textContent = '+';
+      customSample.style.fontWeight = '400';
+      customLabel.textContent = 'Custom';
+    }
+
+    customTile.appendChild(customSample);
+    customTile.appendChild(customLabel);
+    customTile.addEventListener('click', onCustomTileClick);
+    clockFontGrid.appendChild(customTile);
+
+    removeRow.classList.toggle('visible', !!customMeta);
+  }
+
+  // ── Selecting a bundled or default tile ──────────────────────────────
+  async function selectFont(id, family, weight) {
+    currentId = id;
+    applyToClock(family, weight);
+    // Only the active id changes here — the custom font's own data (if
+    // any) is stored under a separate key and stays put, so switching to
+    // a bundled font and back to Custom later doesn't lose the upload.
+    await store.set('clockFont', { id });
+    renderGrid();
+  }
+
+  // ── Clicking the Custom tile ──────────────────────────────────────────
+  // If a custom font is already stored, clicking it just re-selects/
+  // re-applies it (consistent with every other tile being a one-click
+  // "use this" action). To replace it, remove it first, then upload again.
+  async function onCustomTileClick() {
+    if (customMeta) {
+      currentId = 'custom';
+      applyToClock(`'${CUSTOM_FONT_FAMILY}'`, '400');
+      await store.set('clockFont', { id: 'custom' });
+      renderGrid();
+    } else {
+      clockFontFileInput.click();
+    }
+  }
+
+  clockFontFileInput.addEventListener('change', async () => {
+    const file = clockFontFileInput.files && clockFontFileInput.files[0];
+    clockFontFileInput.value = ''; // allow re-picking the same file later
+    if (!file) return;
+
+    const nameOk = /\.(ttf|otf)$/i.test(file.name);
+    if (!nameOk) {
+      showAppToast('Unsupported File', 'Please choose a .ttf or .otf font file.');
+      return;
+    }
+
+    const dataUrl = await fileToDataUrl(file);
+    const ok = await registerCustomFont(dataUrl);
+    if (!ok) {
+      showAppToast('Font Failed to Load', 'That file could not be read as a font.');
+      return;
+    }
+
+    customMeta = { dataUrl, fileName: file.name };
+    currentId = 'custom';
+    applyToClock(`'${CUSTOM_FONT_FAMILY}'`, '400');
+    // Custom font data lives in its own key, independent of which font
+    // is currently selected — see selectFont()'s comment above.
+    await store.set('clockFontCustom', { dataUrl, fileName: file.name });
+    await store.set('clockFont', { id: 'custom' });
+    renderGrid();
+    showAppToast('Custom Font Applied', file.name);
+  });
+
+  removeBtn.addEventListener('click', async () => {
+    customMeta = null;
+    if (customFontFace) {
+      document.fonts.delete(customFontFace);
+      customFontFace = null;
+    }
+    if (currentId === 'custom') {
+      currentId = 'default';
+      applyToClock(DEFAULT_FONT.family, DEFAULT_FONT.weight);
+    }
+    await store.remove('clockFontCustom');
+    await store.set('clockFont', { id: currentId });
+    renderGrid();
+    showAppToast('Custom Font Removed', 'Back to the default typeface.');
+  });
+
+  // ── Dialog open/close — mirrors the Background Settings dialog ──────
+  function openClockFontDialog() {
+    switchClockTab('typeface');
+    clockFontBackdrop.classList.add('open');
+    // Lets other modules (e.g. Other Changes' clock-position control)
+    // re-sync against current storage/state every time the dialog is
+    // actually shown, rather than relying solely on possibly-missed
+    // cross-module events fired while the dialog was closed.
+    document.dispatchEvent(new CustomEvent('flashdash:clockdialogopen'));
+  }
+  function closeClockFontDialog() {
+    clockFontBackdrop.classList.remove('open');
+  }
+
+  clockFontClose.addEventListener('click', closeClockFontDialog);
+  document.getElementById('clockFontBack').addEventListener('click', () => {
+    closeClockFontDialog();
+    settingsBackdrop.classList.add('open');
+  });
+  clockFontBackdrop.addEventListener('click', e => {
+    if (e.target === clockFontBackdrop) closeClockFontDialog();
+  });
+
+  settingsOpenClockFontBtn.addEventListener('click', () => {
+    settingsBackdrop.classList.remove('open');
+    openClockFontDialog();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && clockFontBackdrop.classList.contains('open')) {
+      closeClockFontDialog();
+    }
+  });
+
+  // ── Init: restore persisted choice on load ───────────────────────────
+  (async function init() {
+    // Custom font data (if any) is loaded regardless of which font is
+    // currently active, so the Custom tile shows the right preview/
+    // filename even if the user is currently on a bundled font.
+    const savedCustom = await store.get('clockFontCustom', null);
+    if (savedCustom && savedCustom.dataUrl) {
+      customMeta = { dataUrl: savedCustom.dataUrl, fileName: savedCustom.fileName };
+    }
+
+    const saved = await store.get('clockFont', null);
+    const savedId = saved && saved.id;
+
+    if (savedId === 'custom' && customMeta) {
+      const ok = await registerCustomFont(customMeta.dataUrl);
+      if (ok) {
+        currentId = 'custom';
+        applyToClock(`'${CUSTOM_FONT_FAMILY}'`, '400');
+      } else {
+        // Stored font failed to load (corrupted data) — fall back safely,
+        // but keep customMeta so the tile still offers it; if it keeps
+        // failing the user can just remove and re-upload.
+        currentId = 'default';
+        applyToClock(DEFAULT_FONT.family, DEFAULT_FONT.weight);
+      }
+    } else {
+      const match = BUNDLED_FONTS.find(f => f.id === savedId);
+      if (match) {
+        currentId = match.id;
+        applyToClock(match.family, match.weight);
+      } else {
+        currentId = 'default';
+        applyToClock(DEFAULT_FONT.family, DEFAULT_FONT.weight);
+      }
+    }
+    renderGrid();
+  })();
+
+})();
+
+
+// ════════════════════════════════════════════════════════════
+// initClockOtherChanges — "Modify Clock" → Other Changes tab
+// ────────────────────────────────────────────────────────────
+// Four independent clock tweaks, each persisted under its own key:
+//   clockColorHue   : 0-359 — only ever applied while Indigo is on;
+//                      stored regardless so the slider remembers the
+//                      user's pick even if they leave Indigo and come
+//                      back. Applied via --clock-accent-custom, which
+//                      [data-indigo="true"] reads as a fallback chain
+//                      (see style.css) — so it's a no-op outside Indigo
+//                      even if somehow left set on <html>.
+//   clockSize        : 'default' | 'compact'
+//   clockPosition     : 'default' | 'right' — 'right' is only
+//                      reachable while Tasks is hidden; if Tasks comes
+//                      back on (from the Settings menu, elsewhere) while
+//                      position is 'right', it auto-reverts to 'default'
+//                      per spec, so the two can never overlap.
+//   dateVisible       : boolean
+// ════════════════════════════════════════════════════════════
+(function initClockOtherChanges() {
+  const colorSwatch   = document.getElementById('clockColorSwatch');
+  const colorSpectrum = document.getElementById('clockColorSpectrum');
+  const colorHint      = document.getElementById('clockColorHint');
+
+  const sizeDefaultBtn  = document.getElementById('clockSizeDefault');
+  const sizeCompactBtn  = document.getElementById('clockSizeCompact');
+
+  const posDefaultBtn  = document.getElementById('clockPositionDefault');
+  const posRightBtn    = document.getElementById('clockPositionRight');
+  const posHint         = document.getElementById('clockPositionHint');
+
+  const dateToggle = document.getElementById('clockDateToggle');
+
+  if (!colorSpectrum || !sizeDefaultBtn || !posDefaultBtn || !dateToggle) return;
+
+  let hue = 0;
+  let indigoActive = document.documentElement.getAttribute('data-indigo') === 'true';
+  let tasksVisible = true; // refined by the live event + a direct storage read below
+
+  // ── 1. Clock color ────────────────────────────────────────────────
+  function hueToHex(h) {
+    // Fixed, fairly saturated/light values so every hue stays readable
+    // against the Indigo theme's light panel background.
+    const s = 75, l = 45;
+    const c = (1 - Math.abs(2 * l / 100 - 1)) * (s / 100);
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l / 100 - c / 2;
+    let r, g, b;
+    if (h < 60)       { r = c; g = x; b = 0; }
+    else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; }
+    else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; }
+    else              { r = c; g = 0; b = x; }
+    const toHex = v => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  function applyColor() {
+    if (indigoActive) {
+      const hex = hueToHex(hue);
+      document.documentElement.style.setProperty('--clock-accent-custom', hex);
+      colorSwatch.style.background = hex;
+    } else {
+      // Outside Indigo the clock color is fixed to the theme's normal
+      // text color — clear any override so dark/light are untouched.
+      document.documentElement.style.removeProperty('--clock-accent-custom');
+      colorSwatch.style.background = '';
+    }
+    colorSpectrum.disabled = !indigoActive;
+    colorHint.style.display = indigoActive ? 'none' : '';
+  }
+
+  colorSpectrum.addEventListener('input', async () => {
+    hue = parseInt(colorSpectrum.value, 10) || 0;
+    applyColor();
+    await store.set('clockColorHue', hue);
+  });
+
+  // React live if Indigo gets toggled while this dialog happens to be open
+  // (or in the background) rather than requiring a reopen to notice.
+  document.addEventListener('flashdash:indigochange', (e) => {
+    indigoActive = !!e.detail.enabled;
+    applyColor();
+  });
+
+  // ── 2. Clock size ────────────────────────────────────────────────
+  function applySize(size) {
+    document.documentElement.classList.toggle('clock-size-compact', size === 'compact');
+    sizeDefaultBtn.classList.toggle('active', size === 'default');
+    sizeCompactBtn.classList.toggle('active', size === 'compact');
+    sizeDefaultBtn.setAttribute('aria-checked', String(size === 'default'));
+    sizeCompactBtn.setAttribute('aria-checked', String(size === 'compact'));
+  }
+
+  sizeDefaultBtn.addEventListener('click', async () => {
+    applySize('default');
+    await store.set('clockSize', 'default');
+  });
+  sizeCompactBtn.addEventListener('click', async () => {
+    applySize('compact');
+    await store.set('clockSize', 'compact');
+  });
+
+  // ── 3. Clock position ────────────────────────────────────────────
+  function applyPosition(position) {
+    document.documentElement.classList.toggle('clock-position-right', position === 'right');
+    posDefaultBtn.classList.toggle('active', position === 'default');
+    posRightBtn.classList.toggle('active', position === 'right');
+    posDefaultBtn.setAttribute('aria-checked', String(position === 'default'));
+    posRightBtn.setAttribute('aria-checked', String(position === 'right'));
+  }
+
+  function updatePositionAvailability() {
+    // Spec: "Right" is only selectable while the Tasks panel is HIDDEN —
+    // i.e. disable Right when Tasks is visible (they would overlap), and
+    // enable it when Tasks is hidden. The hint underneath explains *why*
+    // Right is disabled, so it's only shown in the disabled case.
+    posRightBtn.disabled = tasksVisible;
+    posHint.style.display = tasksVisible ? '' : 'none';
+  }
+
+  // Re-reads Tasks visibility straight from storage — the single source
+  // of truth — and re-applies button availability + the auto-revert
+  // rule. Called both at module init and every time the Clock dialog is
+  // (re)opened, so this never depends on a live cross-module event
+  // having fired while the dialog happened to be closed.
+  async function refreshTasksVisibility() {
+    const savedSettings = await store.get('settingsState', null);
+    tasksVisible = !(savedSettings && savedSettings.tasksVisible === false);
+    updatePositionAvailability();
+    if (tasksVisible && document.documentElement.classList.contains('clock-position-right')) {
+      applyPosition('default');
+      await store.set('clockPosition', 'default');
+    }
+  }
+
+  posDefaultBtn.addEventListener('click', async () => {
+    applyPosition('default');
+    await store.set('clockPosition', 'default');
+  });
+  posRightBtn.addEventListener('click', async () => {
+    if (tasksVisible) return; // guarded by disabled state too, but belt & suspenders
+    applyPosition('right');
+    await store.set('clockPosition', 'right');
+  });
+
+  // Live updates while the dialog (or page) is already open/active.
+  document.addEventListener('flashdash:tasksvisibility', (e) => {
+    tasksVisible = !!e.detail.visible;
+    updatePositionAvailability();
+    if (tasksVisible && document.documentElement.classList.contains('clock-position-right')) {
+      applyPosition('default');
+      store.set('clockPosition', 'default');
+    }
+  });
+
+  // Authoritative re-sync every time the Clock dialog is opened — this
+  // is what actually fixes stale/incorrect button state, independent of
+  // whether the live event above fired while the dialog was closed.
+  document.addEventListener('flashdash:clockdialogopen', refreshTasksVisibility);
+
+  // ── 4. Date visibility ───────────────────────────────────────────
+  function applyDateVisible(visible) {
+    document.documentElement.classList.toggle('clock-date-hidden', !visible);
+    dateToggle.setAttribute('aria-checked', String(visible));
+  }
+
+  dateToggle.addEventListener('click', async () => {
+    const next = dateToggle.getAttribute('aria-checked') !== 'true';
+    applyDateVisible(next);
+    await store.set('dateVisible', next);
+  });
+
+  // ── Init ─────────────────────────────────────────────────────────
+  (async function init() {
+    const savedHue = await store.get('clockColorHue', 0);
+    hue = Number.isFinite(savedHue) ? savedHue : 0;
+    colorSpectrum.value = String(hue);
+
+    const savedSize = await store.get('clockSize', 'default');
+    applySize(savedSize === 'compact' ? 'compact' : 'default');
+
+    // Restore the saved clock position first (optimistic), then run the
+    // same authoritative refresh used on every dialog-open — it reads
+    // Tasks visibility fresh from storage and corrects/auto-reverts
+    // position if the saved state turns out to be stale.
+    const savedPosition = await store.get('clockPosition', 'default');
+    applyPosition(savedPosition === 'right' ? 'right' : 'default');
+    await refreshTasksVisibility();
+
+    const savedDateVisible = await store.get('dateVisible', true);
+    applyDateVisible(savedDateVisible !== false);
+
+    indigoActive = document.documentElement.getAttribute('data-indigo') === 'true';
+    applyColor();
+  })();
 })();
