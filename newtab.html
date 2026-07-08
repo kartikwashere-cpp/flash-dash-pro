@@ -5,6 +5,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>New Tab</title>
+  <!-- Google Fonts: load via <link> with preconnect for a faster, more
+       cache-friendly path than the @import inside style.css (which would
+       block CSSOM construction until the font CSS round-trip finishes).
+       The @import has been removed from style.css to match. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="style.css" />
 </head>
 
@@ -92,7 +100,7 @@
       <button class="welcome-btn" id="welcomeDismiss">
         Get Started
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M5 12h14M12 5l7 7-7 7"/>
+          <path d="M5 12h14M12 5l7 7-7 7" />
         </svg>
       </button>
 
@@ -104,64 +112,154 @@
     </div><!-- /welcome-card -->
   </div><!-- /welcomeOverlay -->
 
-  <div class="bg-glow"></div>
+  <!-- ═══════════════════════════════════════════════════════════
+       Custom Background Layer — lowest z-index layer, behind bg-glow
+       and the board. Populated by initBackground() in script.js.
+       Empty when no custom background is set; filled with <img> or
+       <video> when one is active.
+  ════════════════════════════════════════════════════════════ -->
+  <div id="bgLayer"></div>
 
   <!-- freeform photo whiteboard layer -->
   <div class="board" id="board"></div>
 
-  <!-- Left Side Vertical Toolbar -->
-  <nav class="vertical-toolbar" id="verticalToolbar">
-    <div class="toolbar-group">
-      <button class="task-btn" id="addPhotoBtn" title="Add Photo">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-4 4-3-3-6 6"/></svg>
-      </button>
+  <!-- ═══════════════════════════════════════════════════════════
+       Left Navigation — two-level sidebar
+       Level 1: .sidebar-dock — always-visible compact floating pill
+                with the hamburger toggle + most-used quick actions.
+       Level 2: .sidebar-panel — full slide-out list of every action,
+                opened by the hamburger.
+       Every action has exactly one real <button> somewhere below;
+       the other surface (dock icon or sidebar row) just forwards a
+       click to it, so there is a single source of truth per action
+       and all existing handlers/ids keep working unchanged.
+  ════════════════════════════════════════════════════════════ -->
 
-      <button class="task-btn" id="addNoteBtn" title="Add Note">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48">
-  <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 8h10v2H7zm0 3.5h10v2H7zM7 15h6v2H7z"/>
-</svg>
-      </button>
+  <!-- Level 1: compact floating dock (always visible) -->
+  <nav class="sidebar-dock" id="sidebarDock">
+    <button class="dock-btn dock-toggle" id="sidebarToggleBtn" title="Menu">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+        <line x1="4" y1="7" x2="20" y2="7" />
+        <line x1="4" y1="12" x2="20" y2="12" />
+        <line x1="4" y1="17" x2="20" y2="17" />
+      </svg>
+    </button>
 
-      <button class="task-btn" id="bookmarksToggle" title="Bookmarks">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-      </button>
-    </div>
-
-    <!-- Floating widget visibility toggles -->
     <div class="toolbar-divider"></div>
-    <div class="toolbar-group">
-      <button class="task-btn" id="countdownToggleBtn" title="Countdown">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
-      </button>
-      <button class="task-btn" id="pomodoroToggleBtn" title="Focus Timer">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="13" r="8"/><line x1="12" y1="13" x2="12" y2="9"/><line x1="12" y1="13" x2="15" y2="15"/><line x1="10" y1="2" x2="14" y2="2"/></svg>
-      </button>
-    </div>
 
-    <!-- Sites (manual quick-launcher) -->
-    <div class="toolbar-divider"></div>
-    <div class="toolbar-group">
-      <button class="task-btn" id="sitesToggleBtn" title="Sites">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" shape-rendering="crispEdges">
-          <rect x="4" y="9" width="16" height="10" rx="0"/>
-          <rect x="4" y="9" width="16" height="4" rx="0"/>
-          <rect x="10.5" y="13" width="3" height="2.4" rx="0"/>
-          <path d="M4 9V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/>
+    <button class="dock-btn" id="sitesToggleBtn" title="Sites">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6"
+        shape-rendering="crispEdges">
+        <rect x="4" y="9" width="16" height="10" rx="0" />
+        <rect x="4" y="9" width="16" height="4" rx="0" />
+        <rect x="10.5" y="13" width="3" height="2.4" rx="0" />
+        <path d="M4 9V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2" />
+      </svg>
+    </button>
+
+    <button class="dock-btn" id="addNoteBtn" title="Add Note">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18">
+        <path fill="currentColor"
+          d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 8h10v2H7zm0 3.5h10v2H7zM7 15h6v2H7z" />
+      </svg>
+    </button>
+
+    <button class="dock-btn" id="themeToggle" title="Toggle Theme">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"
+        class="theme-icon-svg">
+        <circle cx="12" cy="12" r="4.5" />
+      </svg>
+    </button>
+
+    <button class="dock-btn task-btn-danger" id="clearPhotosBtn" title="Clear Dashboard">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        <line x1="10" y1="11" x2="10" y2="17" />
+        <line x1="14" y1="11" x2="14" y2="17" />
+      </svg>
+    </button>
+  </nav>
+
+  <!-- Level 2: full sidebar (slides out from the left when opened) -->
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <nav class="sidebar-panel" id="sidebarPanel" aria-label="Flash Dash menu">
+    <div class="sidebar-panel-head">
+      <button class="sidebar-back" id="sidebarBackBtn" title="Back to dock">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
     </div>
 
-    <div class="toolbar-bottom">
-      <button class="task-btn" id="themeToggle" title="Toggle Theme">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" id="themeIcon"><circle cx="12" cy="12" r="4.5"/></svg>
+    <!-- ─────────────────────────────────────────────────────────────
+         Toolbar Layout Logic (read before adding/removing buttons)
+         ─────────────────────────────────────────────────────────────
+         .sidebar-list is a CSS grid fixed at exactly 4 rows
+         (grid-template-rows: repeat(4, ...)) with
+         grid-auto-flow: column, which makes the grid fill a column
+         top-to-bottom before starting the next column — buttons are
+         NOT placed left-to-right/row-by-row.
+
+         Fill order for buttons 1..N:
+           Column 1: 1 2 3 4
+           Column 2: 5 6 7 8
+           Column 3: 9 10 11 12
+           ...continues forever, one new column every 4 buttons.
+
+         To add a new toolbar action: just add another .sidebar-icon-btn
+         as a direct child of #sidebarList, in the position you want it
+         to appear (it will land in the next open vertical slot
+         automatically). Do NOT add row/column inline styles or manual
+         grid-row/grid-column values — the whole point of this layout
+         is that it never needs per-button positioning, no matter how
+         many buttons exist.
+
+         Each .sidebar-icon-btn is a fixed-size square (see
+         --sidebar-icon-size below) so columns stay perfectly aligned
+         regardless of icon content. Labels are intentionally not
+         rendered here — use the `title` attribute for the hover
+         tooltip (every browser shows this natively; no extra JS).
+    ────────────────────────────────────────────────────────────── -->
+    <div class="sidebar-list" id="sidebarList">
+      <button class="sidebar-icon-btn" id="addPhotoBtn" title="Add Image">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <circle cx="8.5" cy="10" r="1.5" />
+          <path d="M21 16l-5-5-4 4-3-3-6 6" />
+        </svg>
       </button>
-      <button class="task-btn task-btn-danger" id="clearPhotosBtn" title="Clear All Photos">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+
+      <button class="sidebar-icon-btn" id="bookmarksToggle" title="Bookmarks">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+      </button>
+
+      <button class="sidebar-icon-btn" id="pomodoroToggleBtn" title="Pomodoro">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="13" r="8" />
+          <line x1="12" y1="13" x2="12" y2="9" />
+          <line x1="12" y1="13" x2="15" y2="15" />
+          <line x1="10" y1="2" x2="14" y2="2" />
+        </svg>
+      </button>
+
+      <button class="sidebar-icon-btn" id="countdownToggleBtn" title="Countdown">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18">
+          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+            d="M5 5h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
+          <path fill="currentColor" d="M4 9h16v2H4z" />
+          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M8 2v6M16 2v6" />
+        </svg>
       </button>
     </div>
   </nav>
 
   <input type="file" id="photoInput" accept="image/*" multiple hidden />
+  <!-- Hidden file inputs for custom background upload -->
+  <input type="file" id="bgPhotoInput" accept="image/*" hidden />
+  <input type="file" id="bgVideoInput" accept="video/*" hidden />
 
   <!-- slide-out bookmarks drawer (slides from left next to toolbar) -->
   <div class="bookmarks-drawer" id="bookmarksDrawer">
@@ -190,13 +288,16 @@
   <div class="shortcut-context-menu" id="siteContextMenu" style="display:none;">
     <button id="siteCtxEdit">
       <svg class="ctx-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/><path d="M12.5 5.5l4 4"/>
+        <path
+          d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+        <path d="M12.5 5.5l4 4" />
       </svg>
       Edit site
     </button>
     <button class="ctx-danger" id="siteCtxDelete">
       <svg class="ctx-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
       </svg>
       Delete site
     </button>
@@ -214,8 +315,9 @@
       <div class="search-bar-container" id="searchBarContainer">
         <div class="search-bar-icon">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="16" height="16">
-  <path fill="currentColor" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.3 0 6.3 1.2 8.6 3.2l6-6C34.9 4.1 29.7 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/>
-</svg>
+            <path fill="currentColor"
+              d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.3 0 6.3 1.2 8.6 3.2l6-6C34.9 4.1 29.7 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z" />
+          </svg>
         </div>
         <input type="text" id="searchBarInput" placeholder="Search or type a URL..." autocomplete="off" />
         <kbd class="search-shortcut-hint">Ctrl+G</kbd>
@@ -244,10 +346,17 @@
   <!-- Exam Countdown widget — floating, draggable, independently hideable -->
   <section class="card countdown-card floating-widget" id="countdownCard">
     <button class="widget-close" id="countdownCloseBtn" title="Hide countdown">
-      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2">
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+      </svg>
     </button>
     <button class="countdown-edit-btn" id="countdownEditBtn" title="Edit countdown">
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/><path d="M12.5 5.5l4 4"/></svg>
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path
+          d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+        <path d="M12.5 5.5l4 4" />
+      </svg>
     </button>
     <div class="countdown-days" id="countdownDays">—</div>
     <div class="countdown-name" id="countdownName">Set up your countdown</div>
@@ -257,19 +366,26 @@
   <!-- Pomodoro / Focus Timer widget — floating, draggable, independently hideable -->
   <section class="card pomodoro-card floating-widget" id="pomodoroCard">
     <button class="widget-close" id="pomodoroCloseBtn" title="Hide timer">
-      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2">
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+      </svg>
     </button>
     <header class="card-head">
       <span class="card-title" id="pomodoroModeLabel">Focus Session</span>
       <button class="pomodoro-settings-btn" id="pomodoroSettingsBtn" title="Timer settings">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.488.488 0 0 0 14 2h-4c-.24 0-.43.17-.47.41l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.484.484 0 0 0-.61.22l-2 3.46c-.12.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.23.41.47.41h4c.24 0 .43-.17.47-.41l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="3" />
+          <path
+            d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.488.488 0 0 0 14 2h-4c-.24 0-.43.17-.47.41l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.484.484 0 0 0-.61.22l-2 3.46c-.12.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.23.41.47.41h4c.24 0 .43-.17.47-.41l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" />
+        </svg>
       </button>
     </header>
 
     <div class="pomodoro-ring-wrap">
       <svg class="pomodoro-ring" viewBox="0 0 120 120" width="120" height="120">
-        <circle class="pomodoro-ring-track" cx="60" cy="60" r="52"/>
-        <circle class="pomodoro-ring-progress" id="pomodoroRingProgress" cx="60" cy="60" r="52"/>
+        <circle class="pomodoro-ring-track" cx="60" cy="60" r="52" />
+        <circle class="pomodoro-ring-progress" id="pomodoroRingProgress" cx="60" cy="60" r="52" />
       </svg>
       <div class="pomodoro-time" id="pomodoroTime">25:00</div>
     </div>
@@ -288,7 +404,8 @@
         <button class="mini-dialog-close" id="countdownDialogClose">&times;</button>
       </div>
       <label class="mini-dialog-label" for="countdownNameInput">Event name</label>
-      <input type="text" id="countdownNameInput" class="mini-dialog-input" placeholder="e.g. UPSC Prelims" maxlength="40" />
+      <input type="text" id="countdownNameInput" class="mini-dialog-input" placeholder="e.g. UPSC Prelims"
+        maxlength="40" />
       <label class="mini-dialog-label" for="countdownDateInput">Event date</label>
       <input type="date" id="countdownDateInput" class="mini-dialog-input" />
       <button class="mini-dialog-save" id="countdownDialogSave">Save</button>
@@ -339,27 +456,214 @@
       <div class="settings-list">
         <div class="settings-row">
           <span class="settings-row-label">Tasks</span>
-          <button class="settings-toggle" id="settingsToggleTasks" role="switch" aria-checked="true" aria-label="Toggle Tasks panel">
+          <button class="settings-toggle" id="settingsToggleTasks" role="switch" aria-checked="true"
+            aria-label="Toggle Tasks panel">
             <span class="settings-toggle-knob"></span>
           </button>
         </div>
         <div class="settings-row">
           <span class="settings-row-label">Google Search Bar</span>
-          <button class="settings-toggle" id="settingsToggleSearch" role="switch" aria-checked="true" aria-label="Toggle Google search bar">
+          <button class="settings-toggle" id="settingsToggleSearch" role="switch" aria-checked="true"
+            aria-label="Toggle Google search bar">
             <span class="settings-toggle-knob"></span>
           </button>
         </div>
+        <div class="settings-row">
+          <span class="settings-row-label">Background</span>
+          <button class="settings-row-action-btn" id="settingsOpenBgBtn">Customize&hellip;</button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-row-label">Clock</span>
+          <button class="settings-row-action-btn" id="settingsOpenClockFontBtn">Modify&hellip;</button>
+        </div>
       </div>
 
-      <p class="settings-section-label">Backup</p>
+      <div class="settings-section-header">
+        <p class="settings-section-label">Backup</p>
+        <div class="info-icon-wrapper">
+          <svg class="info-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          <div class="info-tooltip">Save everything — notes, photos, tasks, sites, countdowns, and widget positions — to
+            one file, or restore from a previous export.</div>
+        </div>
+      </div>
       <div class="settings-backup-row">
         <button class="settings-backup-btn" id="settingsExportBtn">Export Data</button>
         <button class="settings-backup-btn" id="settingsImportBtn">Import Data</button>
       </div>
-      <p class="settings-backup-hint">Save everything — notes, photos, tasks, sites, countdowns, and widget positions — to one file, or restore from a previous export.</p>
       <input type="file" id="settingsImportFile" accept="application/json" hidden>
 
       <p class="settings-hint">Press <kbd>/</kbd> anytime to open this menu.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Background Settings dialog — opens from the Settings menu.
+       Three action buttons: Upload Photo, Upload Video, Reset.
+  ════════════════════════════════════════════════════════════ -->
+  <div class="mini-dialog-backdrop" id="bgSettingsBackdrop">
+    <div class="mini-dialog bg-settings-dialog" id="bgSettingsDialog">
+      <div class="mini-dialog-head">
+        <span>Background Settings</span>
+        <button class="mini-dialog-close" id="bgSettingsClose">&times;</button>
+      </div>
+      <div class="bg-settings-actions">
+        <button class="bg-action-btn" id="bgUploadPhotoBtn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <circle cx="8.5" cy="10" r="1.5" />
+            <path d="M21 16l-5-5-4 4-3-3-6 6" />
+          </svg>
+          Upload Photo
+        </button>
+        <button class="bg-action-btn" id="bgUploadVideoBtn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <polygon points="23 7 16 12 23 17 23 7" />
+            <rect x="1" y="5" width="15" height="14" rx="2" />
+          </svg>
+          Upload Video
+        </button>
+        <button class="bg-action-btn bg-action-btn-reset" id="bgResetBtn" disabled>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 .49-4.95" />
+          </svg>
+          Reset to Default
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Background Editor dialog — opens after a file is picked.
+       Wider than a standard mini-dialog: preview frame + controls.
+  ════════════════════════════════════════════════════════════ -->
+  <div class="mini-dialog-backdrop" id="bgEditorBackdrop">
+    <div class="mini-dialog bg-editor-dialog" id="bgEditorDialog">
+      <div class="mini-dialog-head">
+        <span>Choose visible area</span>
+        <button class="mini-dialog-close" id="bgEditorClose">&times;</button>
+      </div>
+
+      <!-- Preview frame — drag inside to pan the image/video -->
+      <div class="bg-preview-frame" id="bgPreviewFrame">
+        <!-- img or video inserted by JS -->
+        <div class="bg-drag-hint" id="bgDragHint">Drag to reposition</div>
+      </div>
+
+      <!-- Controls row: Blur toggle + optional intensity slider -->
+      <div class="bg-controls-row">
+        <button class="bg-toggle-btn" id="bgBlurToggle" aria-pressed="false">Blur: Off</button>
+        <div class="bg-slider-wrap" id="bgBlurSliderWrap">
+          <input type="range" class="bg-slider" id="bgBlurSlider" min="0" max="20" value="4" step="0.5" />
+          <span class="bg-slider-label" id="bgBlurLabel">4px</span>
+        </div>
+        <!-- Sound toggle — only shown for video -->
+        <button class="bg-toggle-btn" id="bgSoundToggle" aria-pressed="false" style="display:none;">Sound: Off</button>
+      </div>
+
+      <!-- Brightness slider -->
+      <div class="bg-controls-row bg-brightness-row">
+        <span class="bg-control-label">Brightness</span>
+        <input type="range" class="bg-slider bg-slider-wide" id="bgBrightnessSlider" min="30" max="150" value="100"
+          step="1" />
+        <span class="bg-slider-label" id="bgBrightnessLabel">100%</span>
+      </div>
+
+      <!-- Footer: Cancel + Apply -->
+      <div class="bg-editor-footer">
+        <button class="bg-editor-cancel" id="bgEditorCancel">Cancel</button>
+        <button class="bg-editor-apply" id="bgEditorApply">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Clock Font dialog — opens from Settings → "Modify Clock".
+       Grid of tiles: Default, 7 bundled fonts, Custom (upload).
+       Each tile previews its own typeface live; clicking one
+       applies it immediately (no separate Apply step needed).
+  ════════════════════════════════════════════════════════════ -->
+  <div class="mini-dialog-backdrop" id="clockFontBackdrop">
+    <div class="mini-dialog clock-font-dialog" id="clockFontDialog">
+      <div class="mini-dialog-head">
+        <button class="mini-dialog-back" id="clockFontBack" title="Back to Settings">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <span>Modify Clock</span>
+        <button class="mini-dialog-close" id="clockFontClose">&times;</button>
+      </div>
+
+      <!-- Tab bar: Typeface / Other Changes — both panels live in this
+           one dialog; only one is shown at a time via .clock-tab-panel.active -->
+      <div class="clock-tab-bar" id="clockTabBar" role="tablist">
+        <button class="clock-tab-btn active" id="clockTabTypeface" role="tab" aria-selected="true" data-tab="typeface">Typeface</button>
+        <button class="clock-tab-btn" id="clockTabOther" role="tab" aria-selected="false" data-tab="other">Other Changes</button>
+      </div>
+
+      <!-- Tab panel: Typeface -->
+      <div class="clock-tab-panel active" id="clockTabPanelTypeface">
+        <p class="clock-font-hint">Pick a font for the clock. Selecting one applies it right away.</p>
+
+        <div class="clock-font-grid" id="clockFontGrid">
+          <!-- Tiles rendered by JS: Default, Adventuro, Caesar, Bubble,
+               Garamond, Minecraft, Redaction, Vintage, Custom -->
+        </div>
+
+        <div class="clock-font-remove-row" id="clockFontRemoveRow">
+          <button class="clock-font-remove-btn" id="clockFontRemoveBtn">Remove custom font</button>
+        </div>
+
+        <input type="file" id="clockFontFileInput" accept=".ttf,.otf,font/ttf,font/otf" hidden />
+      </div>
+
+      <!-- Tab panel: Other Changes -->
+      <div class="clock-tab-panel" id="clockTabPanelOther">
+
+        <!-- 1. Clock color — only adjustable while the Indigo theme is on -->
+        <div class="clock-other-section">
+          <div class="clock-other-row">
+            <span class="clock-other-label">Clock Color</span>
+            <span class="clock-color-swatch" id="clockColorSwatch"></span>
+          </div>
+          <p class="clock-other-hint" id="clockColorHint">Available only while the Indigo theme is active. Right-click the theme button to enable Indigo.</p>
+          <input type="range" class="clock-color-spectrum" id="clockColorSpectrum" min="0" max="359" value="0" disabled />
+        </div>
+
+        <!-- 2. Clock size -->
+        <div class="clock-other-section">
+          <span class="clock-other-label">Clock Size</span>
+          <div class="clock-other-segment" id="clockSizeSegment" role="radiogroup">
+            <button class="clock-segment-btn active" id="clockSizeDefault" data-size="default" role="radio" aria-checked="true">Default</button>
+            <button class="clock-segment-btn" id="clockSizeCompact" data-size="compact" role="radio" aria-checked="false">Compact</button>
+          </div>
+        </div>
+
+        <!-- 3. Clock position — Right only selectable while Tasks is hidden -->
+        <div class="clock-other-section">
+          <span class="clock-other-label">Clock Position</span>
+          <div class="clock-other-segment" id="clockPositionSegment" role="radiogroup">
+            <button class="clock-segment-btn active" id="clockPositionDefault" data-position="default" role="radio" aria-checked="true">Default</button>
+            <button class="clock-segment-btn" id="clockPositionRight" data-position="right" role="radio" aria-checked="false" disabled>Right</button>
+          </div>
+          <p class="clock-other-hint" id="clockPositionHint">Turn off the Tasks panel to move the clock to the right.</p>
+        </div>
+
+        <!-- 4. Date visibility -->
+        <div class="clock-other-section">
+          <div class="clock-other-row">
+            <span class="clock-other-label">Show Date</span>
+            <button class="settings-toggle" id="clockDateToggle" role="switch" aria-checked="true" aria-label="Toggle date visibility">
+              <span class="settings-toggle-knob"></span>
+            </button>
+          </div>
+        </div>
+
+      </div>
     </div>
   </div>
 
