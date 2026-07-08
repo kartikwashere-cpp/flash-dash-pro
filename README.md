@@ -9,6 +9,7 @@
 
 ---
 ## Changelog
+- This is the Flash-Dash Pro, Experience the pro features by opening the setting menu "/".
 - Added Export / Import for backups — save notes, photos, tasks, sites, countdowns, and widget positions to one JSON file, or restore them on a new device
 - Added a Settings menu (press `/` to open) for toggling Tasks and the Google search bar
 - Replaced Pinned Shortcuts with a Sites Drawer for managing custom site shortcuts
