@@ -1,4 +1,54 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap');
+/* Google Fonts are loaded via a non-blocking <link> in newtab.html
+   (with preconnect) for a faster initial paint than @import here. */
+
+/* ══════════════════════════════════════════════════════════════
+   Clock typeface library — bundled local font files used by the
+   "Modify Clock" picker (Settings → Modify Clock). Each is declared
+   once here; the picker just toggles which family --clock-font
+   points to. font-display: swap avoids a flash of invisible text
+   on the very first paint while a chosen font is still loading.
+══════════════════════════════════════════════════════════════ */
+@font-face {
+  font-family: 'ClockFont-Adventuro';
+  src: url('fonts/Adventuro.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'ClockFont-Caesar';
+  src: url('fonts/Caesar.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'ClockFont-Bubble';
+  src: url('fonts/Bubble.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'ClockFont-Garamond';
+  src: url('fonts/Garamond.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'ClockFont-Minecraft';
+  src: url('fonts/Minecraft.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'ClockFont-Redaction';
+  src: url('fonts/Redaction.otf') format('opentype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'ClockFont-Vintage';
+  src: url('fonts/Vintage.ttf') format('truetype');
+  font-display: swap;
+}
 
 :root {
   --bg: #000000;
@@ -8,6 +58,20 @@
   --text: #f5f5f5;
   --text-dim: rgba(245, 245, 245, 0.45);
   --radius: 18px;
+  /* Default clock typeface — overridden inline on <html> by JS once the
+     user picks something other than "Default" in Settings → Modify Clock. */
+  --clock-font: 'Space Grotesk', sans-serif;
+  --clock-font-weight: 700;
+  /* Glass blur amount for cards/dialogs/sidebar/drawers/search — each of
+     those rules keeps its own blur radius (18px/24px/etc, set inline per
+     rule below) by default via var(--panel-blur, <their own value>). The
+     Indigo theme sets --panel-blur to `none` once here at the root, so
+     every one of those surfaces drops its blur in unison without needing
+     a per-rule override. --clock-accent is the dedicated color for the
+     clock + date text, separate from --text so a theme can give the
+     clock its own accent without affecting body text; it defaults to
+     --text so dark/light are unaffected. */
+  --clock-accent: var(--text);
 }
 
 [data-theme="light"] {
@@ -17,6 +81,44 @@
   --border: rgba(0, 0, 0, 0.12);
   --text: #0a0a0a;
   --text-dim: rgba(10, 10, 10, 0.45);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Indigo theme — a solid-panel alternative layered on TOP of
+   whichever base theme (dark/light) is active underneath. It is a
+   separate [data-indigo="true"] attribute on <html>, not a third
+   value of [data-theme], because it's an overlay the user can toggle
+   on/off (right-click on the theme button) without losing/changing
+   their underlying dark/light preference (left-click). When it's
+   off, these rules simply don't apply and the base theme shows
+   exactly as it did before this feature existed.
+
+   Palette below is a light-based indigo scale; all foreground/
+   background pairings were checked against WCAG contrast minimums
+   (text ≥ 4.5:1, borders/UI ≥ 3:1) before being chosen — see the
+   project's `.agents/agents.md` for the verified ratios if these
+   values are ever revisited.
+══════════════════════════════════════════════════════════════ */
+[data-indigo="true"] {
+  --bg: #eef0fc;
+  --glass: #e0e4f8;
+  --glass-strong: #d3d9f4;
+  --border: #6e79c9;
+  --text: #2a2a72;
+  --text-dim: #5b5fa8;
+  /* --clock-accent-custom is set inline on <html> by JS (Other Changes
+     → Clock Color) only while Indigo is active; it falls back to the
+     theme's own indigo accent when no custom color has been chosen.
+     Outside Indigo this variable is never read (see :root below), so
+     the clock color is always locked to dark/light's normal text. */
+  --clock-accent: var(--clock-accent-custom, #3730a3);
+}
+
+/* Kills backdrop-filter blur on every surface that opts into
+   var(--panel-blur) below, turning "frosted glass" into solid flat
+   panels — the defining visual trait of this theme. */
+[data-indigo="true"] {
+  --panel-blur: none;
 }
 
 * {
@@ -36,13 +138,8 @@ body {
   transition: background .25s ease, color .25s ease;
 }
 
-.bg-glow {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  background: radial-gradient(ellipse 80% 60% at 50% 0%, var(--glass) 0%, transparent 60%);
-  pointer-events: none;
-}
+
+ 
 
 /* ---------- Gallery of Goals (Glassmorphic Polaroid) ---------- */
 .board {
@@ -74,9 +171,17 @@ body {
 }
 
 @keyframes photo-lift-ring {
-  0%   { box-shadow: 0 0 0 0px rgba(255, 255, 255, 0.5); }
-  50%  { box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.22); }
-  100% { box-shadow: none; }
+  0% {
+    box-shadow: 0 0 0 0px rgba(255, 255, 255, 0.5);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.22);
+  }
+
+  100% {
+    box-shadow: none;
+  }
 }
 
 [data-theme="light"] .photo.photo-lifted {
@@ -84,9 +189,17 @@ body {
 }
 
 @keyframes photo-lift-ring-light {
-  0%   { box-shadow: 0 0 0 0px rgba(0, 0, 0, 0.3); }
-  50%  { box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.12); }
-  100% { box-shadow: none; }
+  0% {
+    box-shadow: 0 0 0 0px rgba(0, 0, 0, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.12);
+  }
+
+  100% {
+    box-shadow: none;
+  }
 }
 
 .photo img {
@@ -185,8 +298,15 @@ body {
 }
 
 @keyframes drop-hint-in {
-  from { opacity: 0; transform: translate(-50%, -6px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 /* ---------- Sticky Notes ---------- */
@@ -211,17 +331,55 @@ body {
 
 /* Flat, single-tone palette — dark theme uses deep muted tints,
    light theme uses soft pastels, matching the reference card style. */
-.note-yellow { background: #4a4322; border-color: rgba(255, 230, 140, 0.18); }
-.note-pink   { background: #4a2638; border-color: rgba(255, 170, 210, 0.18); }
-.note-mint   { background: #1f3d2e; border-color: rgba(150, 230, 190, 0.18); }
-.note-sky    { background: #1c3548; border-color: rgba(150, 210, 245, 0.18); }
-.note-lilac  { background: #34244a; border-color: rgba(210, 175, 245, 0.18); }
+.note-yellow {
+  background: #4a4322;
+  border-color: rgba(255, 230, 140, 0.18);
+}
 
-[data-theme="light"] .note-yellow { background: #fdf3c4; border-color: rgba(0, 0, 0, 0.08); }
-[data-theme="light"] .note-pink   { background: #fbdce9; border-color: rgba(0, 0, 0, 0.08); }
-[data-theme="light"] .note-mint   { background: #d8f2e3; border-color: rgba(0, 0, 0, 0.08); }
-[data-theme="light"] .note-sky    { background: #d7eafb; border-color: rgba(0, 0, 0, 0.08); }
-[data-theme="light"] .note-lilac  { background: #ebdef9; border-color: rgba(0, 0, 0, 0.08); }
+.note-pink {
+  background: #4a2638;
+  border-color: rgba(255, 170, 210, 0.18);
+}
+
+.note-mint {
+  background: #1f3d2e;
+  border-color: rgba(150, 230, 190, 0.18);
+}
+
+.note-sky {
+  background: #1c3548;
+  border-color: rgba(150, 210, 245, 0.18);
+}
+
+.note-lilac {
+  background: #34244a;
+  border-color: rgba(210, 175, 245, 0.18);
+}
+
+[data-theme="light"] .note-yellow {
+  background: #fdf3c4;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .note-pink {
+  background: #fbdce9;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .note-mint {
+  background: #d8f2e3;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .note-sky {
+  background: #d7eafb;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .note-lilac {
+  background: #ebdef9;
+  border-color: rgba(0, 0, 0, 0.08);
+}
 
 /* Header row: accent dot (left) + close button (right) */
 .note-header {
@@ -248,11 +406,25 @@ body {
   transform: scale(1.2);
 }
 
-.note-yellow .note-dot { background: #c99a2e; }
-.note-pink   .note-dot { background: #d9669b; }
-.note-mint   .note-dot { background: #4caf7d; }
-.note-sky    .note-dot { background: #4f9fd6; }
-.note-lilac  .note-dot { background: #9b6fd9; }
+.note-yellow .note-dot {
+  background: #c99a2e;
+}
+
+.note-pink .note-dot {
+  background: #d9669b;
+}
+
+.note-mint .note-dot {
+  background: #4caf7d;
+}
+
+.note-sky .note-dot {
+  background: #4f9fd6;
+}
+
+.note-lilac .note-dot {
+  background: #9b6fd9;
+}
 
 .note-close {
   width: 18px;
@@ -362,8 +534,11 @@ body {
   border-bottom-color: rgba(0, 0, 0, 0.55);
 }
 
-/* ---------- vertical toolbar (left) ---------- */
-.vertical-toolbar {
+/* ══════════════════════════════════════════════════════════════
+   Left Navigation — Level 1: compact floating dock
+   Always visible. Hamburger toggle + most-used quick actions.
+══════════════════════════════════════════════════════════════ */
+.sidebar-dock {
   position: fixed;
   left: 22px;
   top: 50%;
@@ -371,41 +546,247 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
   background: var(--glass);
   border: 1px solid var(--border);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border-radius: 24px;
-  padding: 12px 8px;
-  z-index: 15;
-  gap: 0;
-}
-
-.toolbar-group {
-  display: flex;
-  flex-direction: column;
+  backdrop-filter: var(--panel-blur, blur(18px));
+  -webkit-backdrop-filter: var(--panel-blur, blur(18px));
+  border-radius: 26px;
+  padding: 10px 8px;
+  z-index: 90;
   gap: 4px;
-  align-items: center;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+  opacity: 1;
+  transition: opacity .18s ease, transform .2s ease;
 }
 
-.toolbar-bottom {
+[data-theme="light"] .sidebar-dock {
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.08);
+}
+
+.dock-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: transform .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
 }
 
-/* Subtle divider between toolbar sections */
+.dock-btn:hover,
+.dock-btn.active {
+  background: var(--glass-strong);
+  color: var(--text);
+  border-color: var(--border);
+  transform: scale(1.08);
+}
+
+.dock-toggle {
+  color: var(--text);
+}
+
+/* Subtle divider between dock sections */
 .toolbar-divider {
   width: 20px;
   height: 1px;
   background: var(--border);
-  margin: 6px 0;
+  margin: 4px 0;
   flex-shrink: 0;
+}
+
+/* While the full sidebar panel is open, the entire dock fades out and
+   slides slightly left, out of the way — the panel occupies the same
+   horizontal position the dock was in, so the two can never overlap.
+   The panel's own header "×" (or Escape, or an outside click) brings
+   the dock back. */
+.sidebar-dock.collapsed-mode {
+  opacity: 0;
+  transform: translateY(-50%) translateX(-12px);
+  pointer-events: none;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Left Navigation — Level 2: full sidebar panel
+   Slides out from behind the dock when the hamburger is toggled.
+══════════════════════════════════════════════════════════════ */
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 55;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
+
+.sidebar-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-panel {
+  position: fixed;
+  left: 22px;
+  top: 50%;
+  transform: translateY(-50%) translateX(-12px);
+  /* Width tracks content instead of a fixed value, so the panel
+     automatically grows as more icon columns are added later and
+     shrinks back down when there are few — see the "Toolbar Layout
+     Logic" comment above #sidebarList for how columns are added. */
+  width: fit-content;
+  min-width: 76px;
+  max-width: calc(100vw - 60px);
+  max-height: 80vh;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  backdrop-filter: var(--panel-blur, blur(24px));
+  -webkit-backdrop-filter: var(--panel-blur, blur(24px));
+  border-radius: var(--radius);
+  padding: 14px;
+  z-index: 58;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s ease, width .2s ease;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="light"] .sidebar-panel {
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.12);
+}
+
+.sidebar-panel.open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%) translateX(0);
+}
+
+.sidebar-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 6px 12px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Back arrow — navigates back to the compact dock rather than
+   "closing a modal", so it sits top-left like a nav-back control. */
+.sidebar-back {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s, transform .15s;
+  flex-shrink: 0;
+}
+
+.sidebar-back:hover {
+  background: var(--glass-strong);
+  border-color: var(--border);
+  color: var(--text);
+  transform: translateX(-2px);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Toolbar Layout Logic — permanent, scalable icon grid
+   ──────────────────────────────────────────────────────────────
+   #sidebarList is a CSS grid pinned to EXACTLY 4 rows
+   (grid-template-rows: repeat(4, ...)) with grid-auto-flow: column.
+   That combination is what makes a new button fall into the next
+   open slot going DOWN the current column, and only start a new
+   column once the current one already has 4 buttons in it:
+
+     Column 1   Column 2   Column 3
+       A1         A2         A3
+       B1         B2         B3
+       C1         C2         C3
+       D1         D2         D3   ...continues forever
+
+   This is enforced entirely by two properties below:
+     - grid-template-rows: repeat(4, var(--sidebar-icon-size))
+         -> hard-caps the grid at 4 rows, always.
+     - grid-auto-flow: column
+         -> fills a column top-to-bottom before starting the next
+            one (the default `row` value would instead fill
+            left-to-right, which is NOT what we want here).
+   grid-auto-columns creates each new column on demand as buttons
+   are added, so columns are never declared by hand.
+
+   WHERE TO ADD NEW BUTTONS:
+   Add another `.sidebar-icon-btn` as a direct child of #sidebarList
+   in newtab.html, anywhere in the list (it will land in the next
+   open vertical slot automatically). Never add inline grid-row /
+   grid-column styles to a button — doing so would override the
+   automatic placement and break the pattern for every button after
+   it. The whole point of this structure is that it scales to an
+   unlimited number of buttons without ever being touched again.
+
+   WHY THIS STRUCTURE:
+   The sidebar is capped at a fixed height (4 rows) so it never grows
+   taller than the dock/board area no matter how many actions Flash
+   Dash gains over time — it grows sideways (more columns, with
+   horizontal scrolling) instead of vertically.
+══════════════════════════════════════════════════════════════ */
+.sidebar-list {
+  --sidebar-icon-size: 44px;
+  display: grid;
+  grid-template-rows: repeat(4, var(--sidebar-icon-size));
+  grid-auto-flow: column;
+  grid-auto-columns: var(--sidebar-icon-size);
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.sidebar-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Each toolbar action is a fixed-size square, icon only — no label.
+   The `title` attribute on the button supplies the native hover
+   tooltip, so the feature name is still discoverable without taking
+   up any layout space. */
+.sidebar-icon-btn {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .14s ease, border-color .14s ease, color .14s ease, transform .12s ease;
+}
+
+.sidebar-icon-btn:hover {
+  background: var(--glass-strong);
+  border-color: var(--border);
+  color: var(--text);
+  transform: scale(1.06);
+}
+
+.sidebar-icon-btn.active {
+  background: var(--glass-strong);
+  border-color: var(--text-dim);
+  color: var(--text);
 }
 
 /* ---------- Sites Drawer (manual quick-access launcher) ---------- */
@@ -458,8 +839,15 @@ body {
 }
 
 @keyframes site-tile-in {
-  from { opacity: 0; transform: scale(0.92); }
-  to   { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .site-tile-open:hover {
@@ -543,8 +931,15 @@ body {
 }
 
 @keyframes ctx-in {
-  from { opacity: 0; transform: scale(0.92); }
-  to   { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .shortcut-context-menu button {
@@ -586,28 +981,6 @@ body {
   opacity: 0.7;
 }
 
-.task-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  transition: transform .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
-}
-
-.task-btn:hover,
-.task-btn.active {
-  background: var(--glass-strong);
-  color: var(--text);
-  border-color: var(--border);
-  transform: scale(1.08);
-}
-
 .task-btn-danger:hover {
   color: #ff6b6b;
   border-color: rgba(255, 107, 107, 0.35);
@@ -628,11 +1001,11 @@ body {
   max-height: 72vh;
   background: var(--glass);
   border: 1px solid var(--border);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: var(--panel-blur, blur(24px));
+  -webkit-backdrop-filter: var(--panel-blur, blur(24px));
   border-radius: var(--radius);
   padding: 18px;
-  z-index: 13;
+  z-index: 65;
   display: flex;
   flex-direction: column;
   opacity: 0;
@@ -768,30 +1141,34 @@ body {
 }
 
 .clock {
-  font-family: 'Space Grotesk', sans-serif;
-  font-weight: 700;
+  font-family: var(--clock-font);
+  font-weight: var(--clock-font-weight);
   font-size: clamp(96px, 14vw, 190px);
   letter-spacing: -2px;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  color: var(--text);
+  align-items: center;
+  position: relative;
+  color: var(--clock-accent);
 }
 
 .ampm {
   font-size: 0.16em;
   font-weight: 600;
-  color: var(--text-dim);
+  color: var(--clock-accent);
+  opacity: 0.65;
   margin-bottom: 0.22em;
   letter-spacing: 1px;
+  position: absolute;
+  left: calc(100% + 10px);
 }
 
 .date {
   margin-top: 6px;
   font-size: 16px;
-  color: var(--text-dim);
+  color: var(--clock-accent);
+  opacity: 0.65;
   letter-spacing: 0.5px;
   font-weight: 500;
 }
@@ -819,7 +1196,7 @@ body {
 .card {
   background: var(--glass);
   border: 1px solid var(--border);
-  backdrop-filter: blur(18px);
+  backdrop-filter: var(--panel-blur, blur(18px));
   border-radius: var(--radius);
   padding: 16px;
 }
@@ -1126,9 +1503,9 @@ body {
 }
 
 .pomodoro-ring {
-  
- transform: scaleY(-1);
-transform: rotate(90deg);
+
+  transform: scaleY(-1);
+  transform: rotate(90deg);
 }
 
 .pomodoro-ring-track {
@@ -1192,6 +1569,7 @@ transform: rotate(90deg);
 
 .pomodoro-btn-primary:hover {
   opacity: 0.88;
+  color: var(--text)
 }
 
 /* Session-complete toast — bottom-center, independent of Notification permission */
@@ -1263,8 +1641,8 @@ transform: rotate(90deg);
   width: 280px;
   background: var(--glass-strong);
   border: 1px solid var(--border);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: var(--panel-blur, blur(24px));
+  -webkit-backdrop-filter: var(--panel-blur, blur(24px));
   border-radius: 18px;
   padding: 18px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
@@ -1280,6 +1658,13 @@ transform: rotate(90deg);
   background: rgba(255, 255, 255, 0.85);
 }
 
+/* Indigo overrides the light-theme-specific override above regardless
+   of which base theme (dark/light) is underneath — solid panel color
+   from the indigo palette, no translucency. */
+[data-indigo="true"] .mini-dialog {
+  background: var(--glass-strong);
+}
+
 .mini-dialog-head {
   display: flex;
   align-items: center;
@@ -1288,6 +1673,34 @@ transform: rotate(90deg);
   font-weight: 600;
   color: var(--text);
   margin-bottom: 14px;
+}
+
+/* When a back button is present the title needs to stay visually centred
+   between two equal-width slots (back left, close right). The title span
+   itself grows to fill the middle and centres its text. */
+.mini-dialog-head .mini-dialog-back ~ span {
+  flex: 1;
+  text-align: center;
+}
+
+.mini-dialog-back {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  flex-shrink: 0;
+}
+
+.mini-dialog-back:hover {
+  background: var(--glass-strong);
+  color: var(--text);
 }
 
 .mini-dialog-close {
@@ -1443,13 +1856,70 @@ transform: rotate(90deg);
 }
 
 /* Backup / Export-Import */
-.settings-section-label {
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 16px 0 8px;
+}
+
+.settings-section-label {
+  margin: 0;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+.info-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+  opacity: 0.6;
+  cursor: help;
+  transition: opacity 0.15s;
+}
+
+.info-icon:hover {
+  opacity: 1;
+}
+
+.info-icon-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  width: max-content;
+  max-width: 220px;
+  padding: 8px 12px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 10;
+  text-transform: none;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-align: center;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.info-icon-wrapper:hover .info-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-8px);
 }
 
 .settings-backup-row {
@@ -1475,12 +1945,7 @@ transform: rotate(90deg);
   border-color: var(--text-dim);
 }
 
-.settings-backup-hint {
-  margin: 8px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-dim);
-}
+
 
 .settings-hint kbd {
   background: var(--glass-strong);
@@ -1496,7 +1961,11 @@ transform: rotate(90deg);
     display: none;
   }
 
-  .vertical-toolbar {
+  .sidebar-dock {
+    left: 10px;
+  }
+
+  .sidebar-panel {
     left: 10px;
   }
 }
@@ -1521,8 +1990,8 @@ transform: rotate(90deg);
   width: 100%;
   background: var(--glass);
   border: 1px solid var(--border);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: var(--panel-blur, blur(20px));
+  -webkit-backdrop-filter: var(--panel-blur, blur(20px));
   border-radius: 28px;
   padding: 11px 20px;
   z-index: 10;
@@ -1624,8 +2093,8 @@ transform: rotate(90deg);
   right: 0;
   background: var(--glass-strong);
   border: 1px solid var(--border);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: var(--panel-blur, blur(24px));
+  -webkit-backdrop-filter: var(--panel-blur, blur(24px));
   border-radius: 18px;
   overflow: hidden;
   z-index: 20;
@@ -1644,8 +2113,15 @@ transform: rotate(90deg);
 }
 
 @keyframes suggestions-in {
-  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .suggestion-section-label {
@@ -1687,12 +2163,12 @@ transform: rotate(90deg);
 
 .suggestion-item:hover,
 .suggestion-item.focused {
-  background: rgba(255,255,255,0.07);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 [data-theme="light"] .suggestion-item:hover,
 [data-theme="light"] .suggestion-item.focused {
-  background: rgba(0,0,0,0.05);
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .suggestion-icon {
@@ -1764,15 +2240,17 @@ transform: rotate(90deg);
 
 
 body.focus-mode .right-panel,
-body.focus-mode .vertical-toolbar,
+body.focus-mode .sidebar-dock,
 body.focus-mode .board,
 body.focus-mode .search-bar-wrapper {
   opacity: 0 !important;
   pointer-events: none !important;
   transition: opacity 0.5s ease;
 }
+
 body.focus-mode .stage {
-  pointer-events: auto; /* keeps clock clickable if needed */
+  pointer-events: auto;
+  /* keeps clock clickable if needed */
 }
 
 
@@ -1830,8 +2308,15 @@ body.focus-mode .stage {
 }
 
 @keyframes welcome-card-in {
-  from { opacity: 0; transform: translateY(20px) scale(0.96); }
-  to   { opacity: 1; transform: translateY(0)    scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* Logo row */
@@ -1997,8 +2482,689 @@ body.focus-mode .stage {
   .feature-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+
   .welcome-card {
     padding: 28px 20px 24px;
     border-radius: 20px;
   }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Custom Background Layer
+   Sits below everything else (bg-glow is z:0, board is z:1).
+   When no background is active this element is empty and the
+   plain var(--bg) on <body> shows as normal.
+══════════════════════════════════════════════════════════════ */
+#bgLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#bgLayer img,
+#bgLayer video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* Hardware acceleration to improve performance when applying CSS blur/brightness to video.
+     `will-change` is intentionally omitted here — leaving it always on
+     pins a permanent GPU layer in memory even when no filter is applied;
+     the translateZ already gives us compositing without the cost. */
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  /* object-position applied dynamically via JS */
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Settings menu — "Background" row action button variant.
+   Sits on the right of a settings-row in place of a toggle switch.
+══════════════════════════════════════════════════════════════ */
+.settings-row-action-btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--glass-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+  flex-shrink: 0;
+}
+
+.settings-row-action-btn:hover {
+  background: var(--border);
+  border-color: var(--text-dim);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Background Settings dialog (mini-dialog extension)
+   Three full-width action button rows.
+══════════════════════════════════════════════════════════════ */
+.bg-settings-dialog {
+  width: 280px;
+}
+
+.bg-settings-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.bg-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--glass-strong);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s, border-color .15s, transform .12s;
+}
+
+.bg-action-btn:hover:not(:disabled) {
+  background: var(--border);
+  border-color: var(--text-dim);
+  transform: translateY(-1px);
+}
+
+/* Reset button: subtle danger tint when active */
+.bg-action-btn-reset:hover:not(:disabled) {
+  background: rgba(255, 80, 80, 0.1);
+  border-color: rgba(255, 107, 107, 0.3);
+  color: #ff6b6b;
+}
+
+[data-theme="light"] .bg-action-btn-reset:hover:not(:disabled) {
+  background: rgba(200, 40, 40, 0.08);
+  border-color: rgba(224, 49, 49, 0.3);
+  color: #e03131;
+}
+
+.bg-action-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  transform: none;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Background Editor dialog — wider than a standard mini-dialog.
+   Overrides the 280px width with a responsive wider value.
+══════════════════════════════════════════════════════════════ */
+.bg-editor-dialog {
+  width: min(92vw, 620px);
+  max-height: 92vh;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.bg-editor-dialog::-webkit-scrollbar {
+  display: none;
+}
+
+/* Preview frame — shows the image/video at viewport aspect ratio.
+   User drags inside here to reposition (pan) the media. */
+.bg-preview-frame {
+  position: relative;
+  width: 100%;
+  /* Aspect ratio computed from viewport in JS, but we give a sensible
+     default in CSS so the frame has size before JS runs. */
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: grab;
+  background: var(--glass-strong);
+  border: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.bg-preview-frame:active {
+  cursor: grabbing;
+}
+
+.bg-preview-frame img,
+.bg-preview-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+  /* object-position is set directly in style by JS */
+}
+
+/* "Drag to reposition" hint — bottom-left of the preview frame */
+.bg-drag-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 10px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border-radius: 5px;
+  padding: 3px 7px;
+  pointer-events: none;
+  letter-spacing: 0.02em;
+}
+
+[data-theme="light"] .bg-drag-hint {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Controls row — holds toggles + sliders in a flex row */
+.bg-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.bg-brightness-row {
+  flex-wrap: nowrap;
+}
+
+/* Control label (e.g. "Brightness") */
+.bg-control-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Pill toggle buttons — Blur: Off/On, Sound: Off/On */
+.bg-toggle-btn {
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--glass-strong);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background .18s, border-color .18s, color .18s;
+}
+
+.bg-toggle-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.bg-toggle-btn.active {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+
+/* Blur intensity slider wrapper — animates in/out on toggle */
+.bg-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  max-width: 0;
+  opacity: 0;
+  transition: max-width .28s ease, opacity .22s ease;
+  flex-shrink: 0;
+}
+
+.bg-slider-wrap.visible {
+  max-width: 200px;
+  opacity: 1;
+}
+
+/* Slider value label */
+.bg-slider-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 28px;
+  flex-shrink: 0;
+}
+
+/* Range input — themed to match the glass aesthetic */
+.bg-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--glass-strong);
+  border: 1px solid var(--border);
+  outline: none;
+  cursor: pointer;
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.bg-slider-wide {
+  flex: 1;
+  width: auto;
+  min-width: 80px;
+}
+
+.bg-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--border);
+  transition: transform .12s ease;
+}
+
+.bg-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.bg-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+/* Editor footer — Cancel + Apply buttons */
+.bg-editor-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.bg-editor-cancel {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--glass-strong);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+
+.bg-editor-cancel:hover {
+  background: var(--border);
+  border-color: var(--text-dim);
+}
+
+.bg-editor-apply {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 10px;
+  border: 1px solid var(--text);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+
+.bg-editor-apply:hover {
+  opacity: 0.88;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Clock Font picker dialog (Settings → Modify Clock)
+   3x3 grid: Default, 7 bundled fonts, Custom — each tile shows a
+   live sample ("07:24") rendered in that font, plus its label.
+══════════════════════════════════════════════════════════════ */
+.clock-font-dialog {
+  width: min(92vw, 420px);
+}
+
+.clock-font-hint {
+  margin: -4px 0 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.clock-font-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.clock-font-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 6px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--glass);
+  color: var(--text);
+  cursor: pointer;
+  min-height: 78px;
+  transition: background .15s, border-color .15s, transform .12s;
+}
+
+.clock-font-tile:hover {
+  background: var(--glass-strong);
+  border-color: var(--text-dim);
+  transform: translateY(-1px);
+}
+
+.clock-font-tile.active {
+  background: var(--glass-strong);
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px var(--text) inset;
+}
+
+.clock-font-sample {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.2px;
+  /* font-family set inline per-tile by JS to preview the real typeface */
+}
+
+.clock-font-tile-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.clock-font-tile.active .clock-font-tile-label {
+  color: var(--text);
+}
+
+/* Custom tile — same shape, distinct dashed border + upload icon when
+   no custom font has been uploaded yet; switches to a normal solid
+   tile (sample + filename) once one has been picked. */
+.clock-font-tile-custom {
+  border-style: dashed;
+}
+
+.clock-font-tile-custom.has-font {
+  border-style: solid;
+}
+
+.clock-font-tile-custom .clock-font-sample {
+  font-size: 15px;
+}
+
+/* Small "Remove custom font" action shown only once a custom font is
+   loaded — sits under the grid rather than inside the tile itself so
+   the tile stays a clean clickable square like every other one. */
+.clock-font-remove-row {
+  display: none;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.clock-font-remove-row.visible {
+  display: flex;
+}
+
+.clock-font-remove-btn {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background .15s, color .15s;
+}
+
+.clock-font-remove-btn:hover {
+  background: var(--glass-strong);
+  color: #ff6b6b;
+}
+
+[data-theme="light"] .clock-font-remove-btn:hover {
+  color: #e03131;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Clock dialog tab bar (Typeface / Other Changes)
+   Both panels live inside the same .clock-font-dialog; only the
+   active one is displayed. Mirrors the segmented/pill look used
+   elsewhere (settings toggle, bg editor) rather than underline tabs.
+══════════════════════════════════════════════════════════════ */
+.clock-tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  margin: -2px 0 16px;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.clock-tab-btn {
+  flex: 1;
+  padding: 8px 0;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+
+.clock-tab-btn:hover {
+  color: var(--text);
+}
+
+.clock-tab-btn.active {
+  background: var(--glass-strong);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border) inset;
+}
+
+.clock-tab-panel {
+  display: none;
+}
+
+.clock-tab-panel.active {
+  display: block;
+}
+
+/* ── "Other Changes" tab content ────────────────────────────── */
+.clock-other-section {
+  margin-bottom: 18px;
+}
+
+.clock-other-section:last-child {
+  margin-bottom: 0;
+}
+
+.clock-other-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.clock-other-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.clock-other-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* 1. Color spectrum slider — a CSS hue gradient track with a round
+   thumb, matching the reference spectrum bar. Disabled (greyed out,
+   non-interactive) whenever the Indigo theme isn't active, since the
+   clock's color is fixed to the base dark/light accent otherwise. */
+.clock-color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--clock-accent);
+  flex-shrink: 0;
+}
+
+.clock-color-spectrum {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    hsl(0, 90%, 60%), hsl(60, 90%, 60%), hsl(120, 90%, 60%),
+    hsl(180, 90%, 60%), hsl(240, 90%, 60%), hsl(300, 90%, 60%), hsl(360, 90%, 60%)
+  );
+  outline: none;
+  cursor: pointer;
+}
+
+.clock-color-spectrum::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.clock-color-spectrum::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.clock-color-spectrum:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* 2 & 3. Segmented two-option controls (size, position) — same shape
+   as the tab bar above, reused at smaller scale. */
+.clock-other-segment {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  margin-top: 8px;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.clock-segment-btn {
+  flex: 1;
+  padding: 8px 0;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, opacity .15s ease;
+}
+
+.clock-segment-btn:hover:not(:disabled):not(.active) {
+  color: var(--text);
+}
+
+.clock-segment-btn.active {
+  background: var(--glass-strong);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border) inset;
+}
+
+.clock-segment-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Clock — size & position modifiers (Other Changes tab)
+   Applied as classes on <html> so they take effect regardless of
+   where in the DOM the clock/date sit.
+══════════════════════════════════════════════════════════════ */
+html.clock-size-compact .clock {
+  font-size: clamp(72px, 10.5vw, 142.5px);
+}
+
+html.clock-size-compact .ampm {
+  /* ampm font-size is em-based off .clock, scales automatically */
+}
+
+/* Position: right — clock column shifts to sit where the tasks panel
+   normally lives. Only ever applied while Tasks is hidden (enforced
+   in JS), so there is never an overlap in practice. */
+html.clock-position-right .stage {
+  align-items: flex-end;
+  padding-right: 60px;
+}
+
+html.clock-position-right .search-bar-wrapper {
+  align-self: flex-end;
+}
+
+@media (max-width: 760px) {
+  html.clock-position-right .stage {
+    align-items: center;
+    padding-right: 0;
+  }
+}
+
+/* visibility (not display:none) so the date's box — including its
+   margin-top — stays reserved in the .stage flex column; otherwise
+   hiding it shrinks the centered column's total height and the clock
+   visibly shifts position when the date is toggled. */
+html.clock-date-hidden .date {
+  visibility: hidden;
 }
