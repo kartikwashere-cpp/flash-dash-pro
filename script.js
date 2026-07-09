@@ -684,6 +684,246 @@ function makeResizable(el, handle, item, onChange, minW = 120, minH = 150) {
   });
 }
 
+// ── Photo edge-resize + snap-to-neighbor system ─────────────────────────
+// Photos resize from any edge/corner (hover near the border for the
+// resize cursor) instead of a single corner handle, and both dragging and
+// resizing snap to the edges, centers, and gap-spacing of other photos —
+// with dashed guide lines while the snap is active. Scoped to photos only
+// (notes keep the simpler makeDraggable/makeResizable pair above).
+const RESIZE_BORDER = 8;   // px from the edge that counts as a resize zone
+const SNAP_THRESHOLD = 12; // proximity in px to trigger snapping
+const SNAP_GAP = 16;       // gap spacing for side-by-side snapping
+
+function getResizeDirection(el, clientX, clientY) {
+  const rect = el.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+
+  let dir = '';
+  if (y < RESIZE_BORDER) dir += 'n';
+  else if (y > rect.height - RESIZE_BORDER) dir += 's';
+  if (x < RESIZE_BORDER) dir += 'w';
+  else if (x > rect.width - RESIZE_BORDER) dir += 'e';
+  return dir;
+}
+
+function getOtherPhotoRects(excludeId) {
+  const rects = [];
+  board.querySelectorAll('.photo').forEach(el => {
+    if (el.dataset.id === excludeId) return;
+    const r = el.getBoundingClientRect();
+    rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+  });
+  return rects;
+}
+
+let _snapGuideEls = [];
+function showSnapGuides(xLines, yLines) {
+  clearSnapGuides();
+  xLines.forEach(x => {
+    const g = document.createElement('div');
+    g.className = 'snap-guide snap-guide-x';
+    g.style.left = x + 'px';
+    document.body.appendChild(g);
+    _snapGuideEls.push(g);
+  });
+  yLines.forEach(y => {
+    const g = document.createElement('div');
+    g.className = 'snap-guide snap-guide-y';
+    g.style.top = y + 'px';
+    document.body.appendChild(g);
+    _snapGuideEls.push(g);
+  });
+}
+function clearSnapGuides() {
+  _snapGuideEls.forEach(g => g.remove());
+  _snapGuideEls = [];
+}
+
+// Checks a dragged/resized rect against a precomputed list of other photo
+// rects (edges, centers, gap-spaced edges) and returns the CLOSEST match
+// within SNAP_THRESHOLD on each axis — not just the first one encountered —
+// so snapping always locks to whichever neighbor is actually nearest.
+// `others` is captured once at drag-start by the caller (see
+// makePhotoInteractive) since only the dragged photo moves during its own
+// drag, so there's no need to re-measure the DOM on every call.
+function computeSnap(dragRect, others) {
+  let snapX = 0, snapY = 0;
+  let bestDistX = Infinity, bestDistY = Infinity;
+  let guideX = null, guideY = null;
+
+  const dLeft = dragRect.left, dRight = dragRect.right, dTop = dragRect.top, dBottom = dragRect.bottom;
+  const dCenterX = (dLeft + dRight) / 2, dCenterY = (dTop + dBottom) / 2;
+
+  const considerX = (delta, guideValue) => {
+    const dist = Math.abs(delta);
+    if (dist < SNAP_THRESHOLD && dist < bestDistX) {
+      bestDistX = dist; snapX = delta; guideX = guideValue;
+    }
+  };
+  const considerY = (delta, guideValue) => {
+    const dist = Math.abs(delta);
+    if (dist < SNAP_THRESHOLD && dist < bestDistY) {
+      bestDistY = dist; snapY = delta; guideY = guideValue;
+    }
+  };
+
+  for (const o of others) {
+    const oCenterX = (o.left + o.right) / 2, oCenterY = (o.top + o.bottom) / 2;
+
+    // --- Horizontal (X) candidates ---
+    considerX(o.left - dLeft, o.left);                                   // left-to-left
+    considerX(o.right - dRight, o.right);                                // right-to-right
+    considerX((o.right + SNAP_GAP) - dLeft, o.right + SNAP_GAP);         // side-by-side, gapped
+    considerX((o.left - SNAP_GAP) - dRight, o.left - SNAP_GAP);          // side-by-side, gapped
+    considerX(o.right - dLeft, o.right);                                 // flush, left-to-right
+    considerX(o.left - dRight, o.left);                                  // flush, right-to-left
+    considerX(oCenterX - dCenterX, oCenterX);                            // center-to-center
+
+    // --- Vertical (Y) candidates ---
+    considerY(o.top - dTop, o.top);
+    considerY(o.bottom - dBottom, o.bottom);
+    considerY((o.bottom + SNAP_GAP) - dTop, o.bottom + SNAP_GAP);
+    considerY((o.top - SNAP_GAP) - dBottom, o.top - SNAP_GAP);
+    considerY(o.bottom - dTop, o.bottom);
+    considerY(o.top - dBottom, o.top);
+    considerY(oCenterY - dCenterY, oCenterY);
+  }
+
+  return {
+    snapX, snapY,
+    guideX: guideX !== null ? [guideX] : [],
+    guideY: guideY !== null ? [guideY] : []
+  };
+}
+
+// Combined drag + edge-resize handler for a single photo, with
+// nearest-match snapping. Hold Alt while dragging/resizing to temporarily
+// disable snapping for fine positioning.
+//
+// All per-pointer-event work here is just cheap arithmetic on numbers
+// already in hand; the actual computeSnap pass (and every DOM write) is
+// deferred into a single requestAnimationFrame callback per frame, so a
+// fast mouse/trackpad firing many pointermove events between paints only
+// costs one snap check and one style write per frame, not one per event.
+function makePhotoInteractive(el, photo, onChange) {
+  let interacting = false;
+
+  // Hover-only cursor feedback (skipped while an interaction is in progress
+  // so it doesn't fight with the 'grabbing' cursor set below).
+  el.addEventListener('pointermove', (e) => {
+    if (interacting) return;
+    if (e.target.closest('.del')) { el.style.cursor = 'pointer'; return; }
+    const dir = getResizeDirection(el, e.clientX, e.clientY);
+    el.style.cursor = dir ? dir + '-resize' : 'grab';
+  });
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return; // ignore right/middle-click drags
+    if (e.target.closest('.del')) return;
+    e.preventDefault();
+
+    const dir = getResizeDirection(el, e.clientX, e.clientY);
+    const startX = e.clientX, startY = e.clientY;
+    const origW = photo.w, origH = photo.h, origX = photo.x, origY = photo.y;
+    el.setPointerCapture(e.pointerId);
+    interacting = true;
+
+    // Other photos don't move during this drag — only measure them once,
+    // instead of on every pointermove/frame.
+    const otherRects = getOtherPhotoRects(photo.id);
+
+    let rafId = 0;
+    let latestEv = null; // most recent raw pointer event; consumed once per frame
+
+    const flush = () => {
+      rafId = 0;
+      if (!latestEv) return;
+      const ev = latestEv;
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      const snapEnabled = !ev.altKey; // hold Alt to disable snapping
+
+      if (dir) {
+        // ---- edge/corner resize, with snapping ----
+        let newW = origW, newH = origH, newX = origX, newY = origY;
+
+        if (dir.includes('e')) { newW = Math.max(50, origW + dx); }
+        else if (dir.includes('w')) {
+          const pw = origW - dx;
+          if (pw >= 50) { newW = pw; newX = origX + dx; }
+        }
+        if (dir.includes('s')) { newH = Math.max(50, origH + dy); }
+        else if (dir.includes('n')) {
+          const ph = origH - dy;
+          if (ph >= 50) { newH = ph; newY = origY + dy; }
+        }
+
+        if (snapEnabled) {
+          const tempRect = { left: newX, top: newY, right: newX + newW, bottom: newY + newH };
+          const snap = computeSnap(tempRect, otherRects);
+          if (dir.includes('e') && snap.snapX) { newW += snap.snapX; }
+          if (dir.includes('s') && snap.snapY) { newH += snap.snapY; }
+          if (dir.includes('w') && snap.snapX) { newX += snap.snapX; newW -= snap.snapX; }
+          if (dir.includes('n') && snap.snapY) { newY += snap.snapY; newH -= snap.snapY; }
+          showSnapGuides(snap.guideX, snap.guideY);
+        } else {
+          clearSnapGuides();
+        }
+
+        photo.w = Math.max(50, newW);
+        photo.h = Math.max(50, newH);
+        photo.x = newX;
+        photo.y = newY;
+      } else {
+        // ---- drag, with snapping ----
+        let x = origX + dx, y = origY + dy;
+
+        const margin = 20;
+        x = Math.max(margin, Math.min(window.innerWidth - photo.w - margin, x));
+        y = Math.max(margin, Math.min(window.innerHeight - photo.h - margin, y));
+
+        if (snapEnabled) {
+          const tempRect = { left: x, top: y, right: x + photo.w, bottom: y + photo.h };
+          const snap = computeSnap(tempRect, otherRects);
+          x += snap.snapX;
+          y += snap.snapY;
+          showSnapGuides(snap.guideX, snap.guideY);
+        } else {
+          clearSnapGuides();
+        }
+
+        photo.x = x;
+        photo.y = y;
+      }
+
+      el.style.left = photo.x + 'px';
+      el.style.top = photo.y + 'px';
+      el.style.width = photo.w + 'px';
+      el.style.height = photo.h + 'px';
+    };
+
+    function move(ev) {
+      latestEv = ev;
+      if (!rafId) rafId = requestAnimationFrame(flush);
+    }
+    function up() {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (rafId) { cancelAnimationFrame(rafId); flush(); }
+      interacting = false;
+      if (!dir) el.style.cursor = 'grab';
+      clearSnapGuides();
+      onChange();
+    }
+
+    if (!dir) el.style.cursor = 'grabbing';
+    el.addEventListener('pointermove', move, { passive: true });
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  });
+}
+
 // Bring any board item (photo or note) to the front, flash a confirmation
 // ring, and persist via the supplied callback.
 function bringToFront(wrap, item, persist) {
@@ -747,6 +987,7 @@ async function _resolvePhotoSrc(photo) {
 async function renderPhotoEl(photo) {
   const wrap = document.createElement('div');
   wrap.className = 'photo';
+  wrap.dataset.id = photo.id; // lets the snap system exclude this photo from its own neighbor checks
   wrap.style.left = photo.x + 'px';
   wrap.style.top = photo.y + 'px';
   wrap.style.width = photo.w + 'px';
@@ -776,10 +1017,6 @@ async function renderPhotoEl(photo) {
   });
   wrap.appendChild(del);
 
-  const resize = document.createElement('div');
-  resize.className = 'resize';
-  wrap.appendChild(resize);
-
   board.appendChild(wrap);
 
   async function persist() {
@@ -791,8 +1028,10 @@ async function renderPhotoEl(photo) {
   // Click (not drag) → bring this photo to the front
   wrap.addEventListener('pointerdown', () => bringToFront(wrap, photo, persist));
 
-  makeDraggable(wrap, photo, persist);
-  makeResizable(wrap, resize, photo, persist);
+  // Photos get the edge-resize + snap-to-neighbor system (any border,
+  // not just a corner handle); notes keep the simpler drag/corner-resize
+  // pair since they don't participate in the photo snap grid.
+  makePhotoInteractive(wrap, photo, persist);
 }
 
 // One-time migration: if the saved photos array still contains inline
@@ -1095,6 +1334,7 @@ function navigateTo(url) {
 
 // Open / close drawer
 sitesToggleBtn.addEventListener('click', () => {
+  clearTimeout(_sitesOpenTimer);
   const isOpen = sitesDrawer.classList.contains('open');
   bookmarksDrawer.classList.remove('open');
   sitesDrawer.classList.toggle('open', !isOpen);
@@ -1102,13 +1342,66 @@ sitesToggleBtn.addEventListener('click', () => {
 });
 
 closeSitesDrawer.addEventListener('click', () => {
+  clearTimeout(_sitesOpenTimer);
+  clearTimeout(_sitesCloseTimer);
   sitesDrawer.classList.remove('open');
 });
 
 document.addEventListener('click', (e) => {
   if (!sitesDrawer.contains(e.target) && !sitesToggleBtn.contains(e.target)) {
+    clearTimeout(_sitesOpenTimer);
+    clearTimeout(_sitesCloseTimer);
     sitesDrawer.classList.remove('open');
   }
+});
+
+// ---------- Hover-to-open (with intent delay) / hover-to-close ----------
+// Hovering the Sites button opens the drawer after a short delay, so just
+// passing the cursor over the button on the way to somewhere else doesn't
+// pop it open — it only opens if the cursor actually lingers there. Once
+// open, it closes automatically as soon as the cursor leaves both the
+// button and the drawer itself (with a small buffer so moving the mouse
+// from the button into the drawer doesn't cause a flicker-close). Clicking
+// the button (above) still toggles it open/closed instantly, for
+// touch/trackpad users who can't hover.
+const SITES_HOVER_OPEN_DELAY = 170;
+const SITES_HOVER_CLOSE_DELAY = 200;
+let _sitesOpenTimer = null;
+let _sitesCloseTimer = null;
+
+function openSitesDrawerViaHover() {
+  bookmarksDrawer.classList.remove('open');
+  if (!sitesDrawer.classList.contains('open')) {
+    sitesDrawer.classList.add('open');
+    loadSites();
+  }
+}
+
+function scheduleSitesClose() {
+  clearTimeout(_sitesCloseTimer);
+  _sitesCloseTimer = setTimeout(() => {
+    sitesDrawer.classList.remove('open');
+  }, SITES_HOVER_CLOSE_DELAY);
+}
+
+function cancelSitesClose() {
+  clearTimeout(_sitesCloseTimer);
+}
+
+sitesToggleBtn.addEventListener('mouseenter', () => {
+  cancelSitesClose();
+  clearTimeout(_sitesOpenTimer);
+  _sitesOpenTimer = setTimeout(openSitesDrawerViaHover, SITES_HOVER_OPEN_DELAY);
+});
+
+sitesToggleBtn.addEventListener('mouseleave', () => {
+  clearTimeout(_sitesOpenTimer);
+  if (sitesDrawer.classList.contains('open')) scheduleSitesClose();
+});
+
+sitesDrawer.addEventListener('mouseenter', cancelSitesClose);
+sitesDrawer.addEventListener('mouseleave', () => {
+  if (sitesDrawer.classList.contains('open')) scheduleSitesClose();
 });
 
 async function loadSites() {
