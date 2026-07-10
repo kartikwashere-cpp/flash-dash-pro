@@ -24,91 +24,107 @@
   ════════════════════════════════════════════════════════════ -->
   <div id="welcomeOverlay" aria-modal="true" role="dialog" aria-label="Welcome to Flash Dash">
     <div class="welcome-card">
+      <div class="welcome-gradient-border" aria-hidden="true"></div>
 
-      <!-- Logo + wordmark -->
-      <div class="welcome-logo">
-        <span class="welcome-logo-icon">⚡</span>
-        <span class="welcome-logo-text">Flash Dash Pro</span>
-      </div>
+      <div class="welcome-layout">
+        <!-- ================= HERO PANEL ================= -->
+        <div class="welcome-hero">
+          <div class="welcome-logo">
+            <span class="welcome-logo-icon">⚡</span>
+            <span class="welcome-logo-text">Flash Dash Pro</span>
+          </div>
 
-      <!-- One-liner intro -->
-      <p class="welcome-intro">
-        Your new tab, reimagined. A beautiful, distraction-free dashboard
-        every time you open a new tab — no clutter, just what you need.
-      </p>
+          <h1 class="welcome-headline">
+            A calmer<br />
+            new&nbsp;tab.
+          </h1>
 
-      <!-- Feature grid (3 cols, auto rows) -->
-      <div class="feature-grid">
+          <p class="welcome-intro">
+            Every time you open a tab, a distraction-free dashboard —
+            clock, tasks, photos, and quick access to what matters.
+          </p>
 
-        <div class="feature-card">
-          <span class="feature-icon">⚙️</span>
-          <span class="feature-title">Settings</span>
-          <span class="feature-desc">Press <kbd>/</kbd> anytime to open the settings menu</span>
+          <!-- Primary shortcut callout: leads with the "/" settings hint
+               so first-time users know how to get anywhere else. -->
+          <div class="welcome-shortcut">
+            <div class="welcome-shortcut-key">
+              <kbd>/</kbd>
+            </div>
+            <div class="welcome-shortcut-copy">
+              <span class="welcome-shortcut-title">Press / anywhere</span>
+              <span class="welcome-shortcut-desc">Opens the settings menu — the fastest way to explore everything.</span>
+            </div>
+          </div>
+
+          <button class="welcome-btn" id="welcomeDismiss">
+            Get Started
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+
+          <p class="welcome-privacy">
+            <span class="welcome-privacy-dot"></span>
+            Everything stays on your device. Nothing is sent anywhere.
+          </p>
         </div>
 
-        <div class="feature-card">
-          <span class="feature-icon">🕐</span>
-          <span class="feature-title">Clock</span>
-          <span class="feature-desc">Big, beautiful time display always at a glance</span>
+        <!-- ================= FEATURE PANEL ================= -->
+        <div class="welcome-features">
+          <div class="welcome-features-title">What's inside</div>
+          <ul class="feature-list">
+
+            <li class="feature-row" style="--i:0">
+              <span class="feature-icon">🖼️</span>
+              <div class="feature-copy">
+                <span class="feature-title">Photo Board</span>
+                <span class="feature-desc">Drag &amp; resize photos with smart alignment guides, equal-spacing hints and pixel labels. Hold <kbd>Alt</kbd> to bypass snapping.</span>
+              </div>
+            </li>
+
+            <li class="feature-row" style="--i:1">
+              <span class="feature-icon">✅</span>
+              <div class="feature-copy">
+                <span class="feature-title">Tasks</span>
+                <span class="feature-desc">Jot to-dos on the right panel — drag the grip handle to reorder them.</span>
+              </div>
+            </li>
+
+            <li class="feature-row" style="--i:2">
+              <span class="feature-icon">🖊️</span>
+              <div class="feature-copy">
+                <span class="feature-title">Sticky Notes</span>
+                <span class="feature-desc">Pin quick notes anywhere on the board, in five colors.</span>
+              </div>
+            </li>
+
+            <li class="feature-row" style="--i:3">
+              <span class="feature-icon">🕐</span>
+              <div class="feature-copy">
+                <span class="feature-title">Clock &amp; Focus</span>
+                <span class="feature-desc">A big, beautiful clock and a Pomodoro-style focus timer with custom sessions.</span>
+              </div>
+            </li>
+
+            <li class="feature-row" style="--i:4">
+              <span class="feature-icon">🔍</span>
+              <div class="feature-copy">
+                <span class="feature-title">Search &amp; Sites</span>
+                <span class="feature-desc">Search right from the tab (<kbd>Ctrl+G</kbd>), plus quick access to bookmarks and pinned sites.</span>
+              </div>
+            </li>
+
+            <li class="feature-row" style="--i:5">
+              <span class="feature-icon">🎨</span>
+              <div class="feature-copy">
+                <span class="feature-title">Make it yours</span>
+                <span class="feature-desc">Custom backgrounds, dark / light / indigo themes, and a full backup + import in Settings.</span>
+              </div>
+            </li>
+
+          </ul>
         </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🔍</span>
-          <span class="feature-title">Search</span>
-          <span class="feature-desc">Google search right from your tab — press <kbd>Ctrl+G</kbd></span>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🖼️</span>
-          <span class="feature-title">Photo Board</span>
-          <span class="feature-desc">Drag, resize from any edge, and snap photos into place</span>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🖊️</span>
-          <span class="feature-title">Sticky Notes</span>
-          <span class="feature-desc">Pin quick notes anywhere on the board, in 5 colors</span>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">✅</span>
-          <span class="feature-title">Tasks</span>
-          <span class="feature-desc">Jot down quick to-dos on the right panel</span>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🌙</span>
-          <span class="feature-title">Theme</span>
-          <span class="feature-desc">Toggle dark / light / Indigo mode with a single click</span>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">⏱️</span>
-          <span class="feature-title">Focus Timer</span>
-          <span class="feature-desc">Pomodoro-style focus &amp; break sessions, fully customizable</span>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">⌨️</span>
-          <span class="feature-title">Built for Speed</span>
-          <span class="feature-desc">Keyboard-first search with history &amp; autocomplete</span>
-        </div>
-
-      </div><!-- /feature-grid -->
-
-      <!-- Dismiss CTA -->
-      <button class="welcome-btn" id="welcomeDismiss">
-        Get Started
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M5 12h14M12 5l7 7-7 7" />
-        </svg>
-      </button>
-
-      <!-- Privacy note -->
-      <p class="welcome-privacy">
-        🔒 100% private — all your data stays on your device. Nothing is collected or sent to any server.
-      </p>
-
+      </div><!-- /welcome-layout -->
     </div><!-- /welcome-card -->
   </div><!-- /welcomeOverlay -->
 
