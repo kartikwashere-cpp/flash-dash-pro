@@ -338,6 +338,11 @@ function _makeTaskRow(task) {
   li.className = 'task-item';
   li.dataset.taskId = task.id;
 
+  const handle = document.createElement('div');
+  handle.className = 'task-drag-handle';
+  handle.title = 'Drag to reorder';
+  handle.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+
   const check = document.createElement('div');
   check.className = 'task-check' + (task.done ? ' done' : '');
 
@@ -349,6 +354,7 @@ function _makeTaskRow(task) {
   del.className = 'task-del';
   del.textContent = '×';
 
+  li.appendChild(handle);
   li.appendChild(check);
   li.appendChild(text);
   li.appendChild(del);
@@ -444,6 +450,131 @@ taskInput.addEventListener('keydown', async (e) => {
   }
   updateCount(current);
 });
+
+// ---------- Task reordering (drag handle) ----------
+// Press-and-drag the grip handle to reorder a task; crossing another
+// row's vertical midpoint swaps it into that slot immediately.
+//
+// IMPORTANT: pointermove/pointerup/pointercancel are attached to the
+// *document*, NOT to the handle. Earlier versions used
+// handle.setPointerCapture(), but because we call insertBefore() on the
+// dragging row mid-drag, the browser silently drops the capture on the
+// handle (a child of the reparented element) — after which no further
+// pointer events reach the handle listeners. That caused the exact
+// reported symptom: only ONE swap happens, then nothing moves, and on
+// release the pointerup never fires so the lifted state + grabbing
+// cursor stay stuck until another pointerdown on the handle resets it.
+// document listeners can't be lost by DOM reparenting.
+(function initTaskReorder() {
+  // Module-level guard against a stuck-drag if something ever throws
+  // between pointerdown and pointerup — a subsequent pointerdown will
+  // still find a clean slate.
+  let activeDrag = null;
+
+  function endActiveDrag() {
+    if (!activeDrag) return;
+    const d = activeDrag;
+    activeDrag = null;
+    document.removeEventListener('pointermove', d.move);
+    document.removeEventListener('pointerup', d.up);
+    document.removeEventListener('pointercancel', d.up);
+    if (d.rafId) cancelAnimationFrame(d.rafId);
+    if (d.draggingRow) d.draggingRow.classList.remove('task-dragging');
+    document.body.classList.remove('task-reordering');
+  }
+
+  taskList.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    const handle = e.target.closest('.task-drag-handle');
+    if (!handle) return;
+    const draggingRow = handle.closest('.task-item');
+    if (!draggingRow) return;
+    e.preventDefault();
+
+    // If somehow a previous drag never cleaned up, tear it down first.
+    if (activeDrag) endActiveDrag();
+
+    const state = {
+      draggingRow,
+      rafId: 0,
+      latestY: e.clientY,
+      move: null,
+      up: null,
+    };
+    activeDrag = state;
+
+    draggingRow.classList.add('task-dragging');
+    // Forces a grabbing cursor everywhere (not just over the handle) and
+    // blocks text selection for the duration of the drag — without this,
+    // the cursor flickers back to whatever's actually under the pointer
+    // (checkmark, text, another handle) as it crosses other rows.
+    document.body.classList.add('task-reordering');
+
+    function flush() {
+      state.rafId = 0;
+      if (!activeDrag) return;
+      const rows = taskList.querySelectorAll('.task-item');
+      for (const sib of rows) {
+        if (sib === draggingRow) continue;
+        const r = sib.getBoundingClientRect();
+        const mid = r.top + r.height / 2;
+        const rel = draggingRow.compareDocumentPosition(sib);
+        const sibIsBelow = !!(rel & Node.DOCUMENT_POSITION_FOLLOWING);
+        const sibIsAbove = !!(rel & Node.DOCUMENT_POSITION_PRECEDING);
+
+        // Dragging DOWN past a row that's currently below us — swap after it.
+        if (sibIsBelow && state.latestY > mid) {
+          taskList.insertBefore(draggingRow, sib.nextSibling);
+          break;
+        }
+        // Dragging UP past a row that's currently above us — swap before it.
+        if (sibIsAbove && state.latestY < mid) {
+          taskList.insertBefore(draggingRow, sib);
+          break;
+        }
+      }
+    }
+
+    state.move = function move(ev) {
+      if (!activeDrag) return;
+      state.latestY = ev.clientY;
+      if (!state.rafId) state.rafId = requestAnimationFrame(flush);
+    };
+
+    state.up = async function up() {
+      if (!activeDrag) return;
+      // Snapshot the row before endActiveDrag clears it, and do a final
+      // synchronous flush so a fast release right after a move still lands
+      // the item where the cursor was.
+      const row = state.draggingRow;
+      if (state.rafId) { cancelAnimationFrame(state.rafId); state.rafId = 0; flush(); }
+      endActiveDrag();
+
+      const orderedIds = Array.from(taskList.querySelectorAll('.task-item')).map(r => r.dataset.taskId);
+      const tasks = await store.get('tasks', []);
+      const byId = new Map(tasks.map(t => [t.id, t]));
+      const reordered = orderedIds.map(id => byId.get(id)).filter(Boolean);
+      // Only write back if every task survived the remap — guards against
+      // persisting a corrupted order if something unexpected happened
+      // (e.g. a task was deleted from another tab mid-drag).
+      if (reordered.length === tasks.length) {
+        await store.set('tasks', reordered);
+      }
+      void row;
+    };
+
+    document.addEventListener('pointermove', state.move, { passive: true });
+    document.addEventListener('pointerup', state.up);
+    document.addEventListener('pointercancel', state.up);
+  });
+
+  // Defensive: if the window loses focus mid-drag (e.g. alt-tab), the
+  // pointerup may never arrive — end the drag on blur so we don't leave
+  // the row stuck in its lifted state.
+  window.addEventListener('blur', () => {
+    if (activeDrag) endActiveDrag();
+  });
+})();
 
 // ---------- theme ----------
 const themeToggle = document.getElementById('themeToggle');
@@ -712,88 +843,365 @@ function getOtherPhotoRects(excludeId) {
   board.querySelectorAll('.photo').forEach(el => {
     if (el.dataset.id === excludeId) return;
     const r = el.getBoundingClientRect();
-    rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+    rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height });
   });
+  // Also include the viewport itself as a snap target so photos snap to
+  // screen center and screen edges — handy for solo photos with no
+  // neighbors yet. Marked so the guide renderer can style it differently.
   return rects;
 }
 
-let _snapGuideEls = [];
-function showSnapGuides(xLines, yLines) {
-  clearSnapGuides();
-  xLines.forEach(x => {
-    const g = document.createElement('div');
-    g.className = 'snap-guide snap-guide-x';
-    g.style.left = x + 'px';
-    document.body.appendChild(g);
-    _snapGuideEls.push(g);
-  });
-  yLines.forEach(y => {
-    const g = document.createElement('div');
-    g.className = 'snap-guide snap-guide-y';
-    g.style.top = y + 'px';
-    document.body.appendChild(g);
-    _snapGuideEls.push(g);
-  });
+// ── SNAP GUIDE RENDERER (reconciled) ──────────────────────────────────
+// Canva/Figma-style guides. The renderer is a KEYED RECONCILER: elements
+// are pooled and re-used across frames, and only the elements whose
+// position/size changed are touched. This kills the flicker you get from
+// clearing and recreating all DOM nodes every frame — a guide that stays
+// in the same place across many frames keeps the same DOM node, so no
+// fade-in animation is retriggered and no layout thrashing happens.
+//
+// Guide types:
+//   • edge guides   — magenta bounded lines between the moving photo and
+//                     the neighbor(s) it's aligning to (edge-to-edge or
+//                     gap-spaced).
+//   • center guides — violet bounded lines for center-to-center alignment.
+//   • dim brackets  — green pixel-dimension brackets. During RESIZE these
+//                     are shown for every visible photo (dragged and all
+//                     others) so you can eyeball width/height matches at
+//                     any moment; during DRAG they only appear when a
+//                     size-match to a neighbor is detected.
+//   • spacing badges— "= 24" pills in the gaps between the moving photo
+//                     and two collinear neighbors when spacing matches.
+const _snapGuidePool = new Map();  // key -> HTMLElement
+const _snapGuideInUse = new Set(); // keys touched during current render pass
+
+function _guide(key, className) {
+  let el = _snapGuidePool.get(key);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = className;
+    document.body.appendChild(el);
+    _snapGuidePool.set(key, el);
+  } else if (el.className !== className) {
+    el.className = className;
+  }
+  _snapGuideInUse.add(key);
+  return el;
 }
+
+// Set a style property only if it actually changed — avoids invalidating
+// styles/layout when the same guide sits at the same coordinates across
+// multiple frames (the common case when a snap is "held" during a drag).
+function _setStyle(el, prop, value) {
+  if (el.style[prop] !== value) el.style[prop] = value;
+}
+function _setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function _drawVGuide(key, x, rects, kind) {
+  let top = Infinity, bot = -Infinity;
+  for (const r of rects) {
+    if (r.top < top) top = r.top;
+    if (r.bottom > bot) bot = r.bottom;
+  }
+  if (!isFinite(top) || !isFinite(bot)) return;
+  const el = _guide(key, 'snap-guide snap-guide-v snap-guide-' + kind);
+  _setStyle(el, 'left',   (x - 0.5) + 'px');
+  _setStyle(el, 'top',    top + 'px');
+  _setStyle(el, 'height', (bot - top) + 'px');
+}
+
+function _drawHGuide(key, y, rects, kind) {
+  let left = Infinity, right = -Infinity;
+  for (const r of rects) {
+    if (r.left < left) left = r.left;
+    if (r.right > right) right = r.right;
+  }
+  if (!isFinite(left) || !isFinite(right)) return;
+  const el = _guide(key, 'snap-guide snap-guide-h snap-guide-' + kind);
+  _setStyle(el, 'top',   (y - 0.5) + 'px');
+  _setStyle(el, 'left',  left + 'px');
+  _setStyle(el, 'width', (right - left) + 'px');
+}
+
+// Dimension bracket. `key` identifies which photo (and axis) so the same
+// DOM node is reused across frames while a resize is in progress.
+function _drawDimBracket(key, rect, axis) {
+  const el = _guide(key, 'snap-guide snap-dim-bracket snap-dim-' + axis);
+  if (axis === 'w') {
+    _setStyle(el, 'left',   rect.left + 'px');
+    _setStyle(el, 'top',    (rect.bottom + 8) + 'px');
+    _setStyle(el, 'width',  (rect.right - rect.left) + 'px');
+    _setStyle(el, 'height', '');
+    _setText(el, Math.round(rect.right - rect.left) + ' px');
+  } else {
+    _setStyle(el, 'left',   (rect.right + 8) + 'px');
+    _setStyle(el, 'top',    rect.top + 'px');
+    _setStyle(el, 'height', (rect.bottom - rect.top) + 'px');
+    _setStyle(el, 'width',  '');
+    _setText(el, Math.round(rect.bottom - rect.top) + ' px');
+  }
+}
+
+function _drawSpacingBadge(key, x, y, gap) {
+  const el = _guide(key, 'snap-guide snap-spacing-badge');
+  _setStyle(el, 'left', x + 'px');
+  _setStyle(el, 'top',  y + 'px');
+  _setText(el, '= ' + Math.round(gap));
+}
+
+// Remove any guide that WASN'T rendered this pass — the reconciler's
+// commit step. Called at the end of renderSnapReport.
+function _commitSnapGuides() {
+  for (const [key, el] of _snapGuidePool) {
+    if (!_snapGuideInUse.has(key)) {
+      el.remove();
+      _snapGuidePool.delete(key);
+    }
+  }
+  _snapGuideInUse.clear();
+}
+
+// Hard reset — called at the end of a drag/resize.
 function clearSnapGuides() {
-  _snapGuideEls.forEach(g => g.remove());
-  _snapGuideEls = [];
+  for (const el of _snapGuidePool.values()) el.remove();
+  _snapGuidePool.clear();
+  _snapGuideInUse.clear();
+}
+
+// Full guide renderer. `report` is the structured output of computeSnap.
+// `mode` is 'resize' or 'drag' — controls whether dimension brackets are
+// shown for every photo (resize) or only when a size-match is detected
+// (drag).
+function renderSnapReport(report, dragRect, mode) {
+  if (!report) { clearSnapGuides(); return; }
+
+  // Vertical guides (X-axis alignment) — grouped by their screen X.
+  for (const g of report.vGuides) {
+    const involved = [dragRect, ...g.rects];
+    _drawVGuide('v:' + g.kind + ':' + Math.round(g.x), g.x, involved, g.kind);
+  }
+  // Horizontal guides (Y-axis alignment) — grouped by their screen Y.
+  for (const g of report.hGuides) {
+    const involved = [dragRect, ...g.rects];
+    _drawHGuide('h:' + g.kind + ':' + Math.round(g.y), g.y, involved, g.kind);
+  }
+
+  if (mode === 'resize') {
+    // Always draw dim brackets on the dragged photo…
+    _drawDimBracket('dim:drag:w', dragRect, 'w');
+    _drawDimBracket('dim:drag:h', dragRect, 'h');
+    // …and on every other photo, so any potential dimension match is
+    // visible from anywhere on the board without having to hit an exact
+    // snap threshold first.
+    if (report.allRects) {
+      let i = 0;
+      for (const r of report.allRects) {
+        _drawDimBracket('dim:o' + i + ':w', r, 'w');
+        _drawDimBracket('dim:o' + i + ':h', r, 'h');
+        i++;
+      }
+    }
+  } else {
+    // Drag mode — only show brackets when a dimension actually matches.
+    for (let i = 0; i < report.sizeMatches.length; i++) {
+      const m = report.sizeMatches[i];
+      _drawDimBracket('dim:drag:' + m.axis, dragRect, m.axis);
+      _drawDimBracket('dim:m' + i + ':' + m.axis, m.rect, m.axis);
+    }
+  }
+
+  // Equal-spacing badges between the three collinear rects.
+  for (let i = 0; i < report.spacing.length; i++) {
+    const s = report.spacing[i];
+    _drawSpacingBadge('sp:' + i, s.x, s.y, s.gap);
+  }
+
+  // Reconcile: everything NOT touched this frame gets removed.
+  _commitSnapGuides();
 }
 
 // Checks a dragged/resized rect against a precomputed list of other photo
-// rects (edges, centers, gap-spaced edges) and returns the CLOSEST match
-// within SNAP_THRESHOLD on each axis — not just the first one encountered —
-// so snapping always locks to whichever neighbor is actually nearest.
-// `others` is captured once at drag-start by the caller (see
-// makePhotoInteractive) since only the dragged photo moves during its own
-// drag, so there's no need to re-measure the DOM on every call.
+// rects and returns a structured snap report:
+//   { snapX, snapY, vGuides, hGuides, sizeMatches, spacing, allRects }
+//
+// vGuides / hGuides are ARRAYS — one entry per distinct alignment line —
+// with the involved neighbor rects so the renderer can bound the line to
+// just those photos (Canva/Figma style) instead of drawing it across the
+// whole viewport.
+//
+// `others` is captured once at drag-start by the caller since only the
+// dragged photo moves during its own drag.
 function computeSnap(dragRect, others) {
-  let snapX = 0, snapY = 0;
-  let bestDistX = Infinity, bestDistY = Infinity;
-  let guideX = null, guideY = null;
-
-  const dLeft = dragRect.left, dRight = dragRect.right, dTop = dragRect.top, dBottom = dragRect.bottom;
+  const dLeft = dragRect.left, dRight = dragRect.right;
+  const dTop = dragRect.top, dBottom = dragRect.bottom;
   const dCenterX = (dLeft + dRight) / 2, dCenterY = (dTop + dBottom) / 2;
+  const dW = dRight - dLeft, dH = dBottom - dTop;
 
-  const considerX = (delta, guideValue) => {
-    const dist = Math.abs(delta);
-    if (dist < SNAP_THRESHOLD && dist < bestDistX) {
-      bestDistX = dist; snapX = delta; guideX = guideValue;
-    }
-  };
-  const considerY = (delta, guideValue) => {
-    const dist = Math.abs(delta);
-    if (dist < SNAP_THRESHOLD && dist < bestDistY) {
-      bestDistY = dist; snapY = delta; guideY = guideValue;
-    }
-  };
+  // ---- Axis snap selection (nearest wins) ----
+  // Each candidate is { delta, guideValue, kind, rect } — delta is how far
+  // the dragged rect needs to move on this axis to lock into the guide.
+  const xCandidates = [];
+  const yCandidates = [];
 
   for (const o of others) {
-    const oCenterX = (o.left + o.right) / 2, oCenterY = (o.top + o.bottom) / 2;
+    const oCenterX = (o.left + o.right) / 2;
+    const oCenterY = (o.top + o.bottom) / 2;
 
-    // --- Horizontal (X) candidates ---
-    considerX(o.left - dLeft, o.left);                                   // left-to-left
-    considerX(o.right - dRight, o.right);                                // right-to-right
-    considerX((o.right + SNAP_GAP) - dLeft, o.right + SNAP_GAP);         // side-by-side, gapped
-    considerX((o.left - SNAP_GAP) - dRight, o.left - SNAP_GAP);          // side-by-side, gapped
-    considerX(o.right - dLeft, o.right);                                 // flush, left-to-right
-    considerX(o.left - dRight, o.left);                                  // flush, right-to-left
-    considerX(oCenterX - dCenterX, oCenterX);                            // center-to-center
+    // Edge-to-edge alignment (left-left, right-right, top-top, bottom-bottom)
+    xCandidates.push({ delta: o.left  - dLeft,   guideValue: o.left,   kind: 'edge',   rect: o });
+    xCandidates.push({ delta: o.right - dRight,  guideValue: o.right,  kind: 'edge',   rect: o });
+    // Flush alignment (right-of-neighbor to left-of-drag and vice versa)
+    xCandidates.push({ delta: o.right - dLeft,   guideValue: o.right,  kind: 'edge',   rect: o });
+    xCandidates.push({ delta: o.left  - dRight,  guideValue: o.left,   kind: 'edge',   rect: o });
+    // Side-by-side, gap-spaced
+    xCandidates.push({ delta: (o.right + SNAP_GAP) - dLeft,  guideValue: o.right + SNAP_GAP, kind: 'edge', rect: o });
+    xCandidates.push({ delta: (o.left  - SNAP_GAP) - dRight, guideValue: o.left  - SNAP_GAP, kind: 'edge', rect: o });
+    // Center-to-center (accent kind so the renderer colors it differently)
+    xCandidates.push({ delta: oCenterX - dCenterX, guideValue: oCenterX, kind: 'center', rect: o });
 
-    // --- Vertical (Y) candidates ---
-    considerY(o.top - dTop, o.top);
-    considerY(o.bottom - dBottom, o.bottom);
-    considerY((o.bottom + SNAP_GAP) - dTop, o.bottom + SNAP_GAP);
-    considerY((o.top - SNAP_GAP) - dBottom, o.top - SNAP_GAP);
-    considerY(o.bottom - dTop, o.bottom);
-    considerY(o.top - dBottom, o.top);
-    considerY(oCenterY - dCenterY, oCenterY);
+    yCandidates.push({ delta: o.top    - dTop,    guideValue: o.top,    kind: 'edge',   rect: o });
+    yCandidates.push({ delta: o.bottom - dBottom, guideValue: o.bottom, kind: 'edge',   rect: o });
+    yCandidates.push({ delta: o.bottom - dTop,    guideValue: o.bottom, kind: 'edge',   rect: o });
+    yCandidates.push({ delta: o.top    - dBottom, guideValue: o.top,    kind: 'edge',   rect: o });
+    yCandidates.push({ delta: (o.bottom + SNAP_GAP) - dTop,    guideValue: o.bottom + SNAP_GAP, kind: 'edge', rect: o });
+    yCandidates.push({ delta: (o.top    - SNAP_GAP) - dBottom, guideValue: o.top    - SNAP_GAP, kind: 'edge', rect: o });
+    yCandidates.push({ delta: oCenterY - dCenterY, guideValue: oCenterY, kind: 'center', rect: o });
+  }
+
+  // Pick the nearest candidate on each axis that's within threshold.
+  function pickBest(cands) {
+    let best = null;
+    for (const c of cands) {
+      const d = Math.abs(c.delta);
+      if (d < SNAP_THRESHOLD && (!best || d < Math.abs(best.delta))) best = c;
+    }
+    return best;
+  }
+
+  const bestX = pickBest(xCandidates);
+  const bestY = pickBest(yCandidates);
+
+  const snapX = bestX ? bestX.delta : 0;
+  const snapY = bestY ? bestY.delta : 0;
+
+  // The post-snap rect (what the photo WILL be after this frame's snap).
+  const finalRect = {
+    left: dLeft + snapX,
+    right: dRight + snapX,
+    top: dTop + snapY,
+    bottom: dBottom + snapY,
+  };
+
+  // ---- Group guides: any neighbor that ALSO sits exactly on the winning
+  // line contributes to the same merged guide (bounded line spans them all).
+  const vGuides = [];
+  const hGuides = [];
+  const EPS = 0.75; // sub-pixel tolerance after snap
+
+  if (bestX !== null && bestX !== undefined) {
+    const gx = bestX.guideValue;
+    const rects = [];
+    for (const o of others) {
+      const oCenterX = (o.left + o.right) / 2;
+      if (
+        Math.abs(o.left - gx) < EPS ||
+        Math.abs(o.right - gx) < EPS ||
+        Math.abs(oCenterX - gx) < EPS ||
+        Math.abs((o.right + SNAP_GAP) - gx) < EPS ||
+        Math.abs((o.left - SNAP_GAP) - gx) < EPS
+      ) rects.push(o);
+    }
+    if (rects.length === 0) rects.push(bestX.rect);
+    vGuides.push({ x: gx, kind: bestX.kind, rects });
+  }
+  if (bestY !== null && bestY !== undefined) {
+    const gy = bestY.guideValue;
+    const rects = [];
+    for (const o of others) {
+      const oCenterY = (o.top + o.bottom) / 2;
+      if (
+        Math.abs(o.top - gy) < EPS ||
+        Math.abs(o.bottom - gy) < EPS ||
+        Math.abs(oCenterY - gy) < EPS ||
+        Math.abs((o.bottom + SNAP_GAP) - gy) < EPS ||
+        Math.abs((o.top - SNAP_GAP) - gy) < EPS
+      ) rects.push(o);
+    }
+    if (rects.length === 0) rects.push(bestY.rect);
+    hGuides.push({ y: gy, kind: bestY.kind, rects });
+  }
+
+  // ---- Same-size detection (width / height matches a neighbor) ----
+  const sizeMatches = [];
+  for (const o of others) {
+    if (Math.abs((o.right - o.left) - dW) < SNAP_THRESHOLD * 0.5) {
+      sizeMatches.push({ axis: 'w', rect: o });
+    }
+    if (Math.abs((o.bottom - o.top) - dH) < SNAP_THRESHOLD * 0.5) {
+      sizeMatches.push({ axis: 'h', rect: o });
+    }
+  }
+
+  // ---- Equal-spacing detection ----
+  // Look for triples where the dragged photo sits between two neighbors
+  // with roughly equal gaps on both sides (horizontally or vertically).
+  const spacing = [];
+  const finalCX = (finalRect.left + finalRect.right) / 2;
+  const finalCY = (finalRect.top + finalRect.bottom) / 2;
+
+  // Horizontal equal spacing: one neighbor to the left of drag, one to the right,
+  // both vertically overlapping the drag.
+  const leftNeighbors = [];
+  const rightNeighbors = [];
+  const topNeighbors = [];
+  const botNeighbors = [];
+  for (const o of others) {
+    const yOverlap = Math.min(finalRect.bottom, o.bottom) - Math.max(finalRect.top, o.top);
+    const xOverlap = Math.min(finalRect.right, o.right) - Math.max(finalRect.left, o.left);
+    if (yOverlap > 0) {
+      if (o.right <= finalRect.left) leftNeighbors.push(o);
+      else if (o.left >= finalRect.right) rightNeighbors.push(o);
+    }
+    if (xOverlap > 0) {
+      if (o.bottom <= finalRect.top) topNeighbors.push(o);
+      else if (o.top >= finalRect.bottom) botNeighbors.push(o);
+    }
+  }
+  // Nearest on each side
+  leftNeighbors.sort((a, b) => b.right - a.right);
+  rightNeighbors.sort((a, b) => a.left - b.left);
+  topNeighbors.sort((a, b) => b.bottom - a.bottom);
+  botNeighbors.sort((a, b) => a.top - b.top);
+
+  if (leftNeighbors[0] && rightNeighbors[0]) {
+    const gapL = finalRect.left - leftNeighbors[0].right;
+    const gapR = rightNeighbors[0].left - finalRect.right;
+    if (Math.abs(gapL - gapR) < 1 && gapL > 2) {
+      spacing.push({ x: leftNeighbors[0].right + gapL / 2 - 12, y: finalCY - 10, gap: gapL });
+      spacing.push({ x: finalRect.right + gapR / 2 - 12, y: finalCY - 10, gap: gapR });
+    }
+  }
+  if (topNeighbors[0] && botNeighbors[0]) {
+    const gapT = finalRect.top - topNeighbors[0].bottom;
+    const gapB = botNeighbors[0].top - finalRect.bottom;
+    if (Math.abs(gapT - gapB) < 1 && gapT > 2) {
+      spacing.push({ x: finalCX - 12, y: topNeighbors[0].bottom + gapT / 2 - 10, gap: gapT });
+      spacing.push({ x: finalCX - 12, y: finalRect.bottom + gapB / 2 - 10, gap: gapB });
+    }
   }
 
   return {
     snapX, snapY,
-    guideX: guideX !== null ? [guideX] : [],
-    guideY: guideY !== null ? [guideY] : []
+    vGuides, hGuides,
+    sizeMatches, spacing,
+    // Pass through the full neighbor list so the renderer can draw
+    // dimension brackets on every visible photo during a resize —
+    // that's how the user asked the size labels to work.
+    allRects: others,
+    // Back-compat shims for any callers still reading these:
+    guideX: bestX ? [bestX.guideValue] : [],
+    guideY: bestY ? [bestY.guideValue] : [],
   };
 }
 
@@ -865,7 +1273,10 @@ function makePhotoInteractive(el, photo, onChange) {
           if (dir.includes('s') && snap.snapY) { newH += snap.snapY; }
           if (dir.includes('w') && snap.snapX) { newX += snap.snapX; newW -= snap.snapX; }
           if (dir.includes('n') && snap.snapY) { newY += snap.snapY; newH -= snap.snapY; }
-          showSnapGuides(snap.guideX, snap.guideY);
+          // Post-snap rect — the guides render against where the photo
+          // ACTUALLY lands this frame, so bounded lines line up exactly.
+          const finalRect = { left: newX, top: newY, right: newX + newW, bottom: newY + newH };
+          renderSnapReport(snap, finalRect, 'resize');
         } else {
           clearSnapGuides();
         }
@@ -887,7 +1298,8 @@ function makePhotoInteractive(el, photo, onChange) {
           const snap = computeSnap(tempRect, otherRects);
           x += snap.snapX;
           y += snap.snapY;
-          showSnapGuides(snap.guideX, snap.guideY);
+          const finalRect = { left: x, top: y, right: x + photo.w, bottom: y + photo.h };
+          renderSnapReport(snap, finalRect, 'drag');
         } else {
           clearSnapGuides();
         }
@@ -1665,14 +2077,48 @@ siteDialogSave.addEventListener('click', async () => {
   // Bundles every piece of user data Flash Dash stores into one JSON
   // file the user can save externally, and can restore it later —
   // e.g. after a browser reinstall or when moving to a new device.
+  // v2 fixes the "photos come back broken after import" bug: user data
+  // lives in TWO places, not one — chrome.storage.local for JSON records
+  // (photo positions/sizes, notes, tasks, etc.) AND IndexedDB for the
+  // actual image Blobs (photo blobs keyed by photo id, plus the custom
+  // background blob). The old exporter only serialized chrome.storage,
+  // so on import the `photos` array came back with the right positions
+  // but no image data to load. v2 now also snapshots every photo blob
+  // (and the background blob) as base64, includes them under `blobs.*`
+  // in the JSON, and restores them into IndexedDB on import.
+  // Every chrome.storage key the app actually writes. Anything not
+  // listed here won't be exported/restored, so keep this list in sync
+  // with new features that persist state. `welcomed` is included so an
+  // imported install doesn't re-show the first-run overlay.
   const BACKUP_KEYS = [
-    'notes', 'photos', 'tasks', 'customSites',
-    'countdownEvent', 'countdownWidget', 'pomodoroWidget'
+    // Board & content
+    'notes', 'photos', 'tasks', 'customSites', 'countdownEvent',
+    // Theme & appearance
+    'theme', 'indigoEnabled', 'backgroundSettings',
+    // Clock
+    'clockColorHue', 'clockFont', 'clockFontCustom',
+    'clockPosition', 'clockSize', 'dateVisible',
+    // Widgets / misc
+    'pomodoroState', 'settingsState', 'sidebarOpen', 'welcomed'
   ];
 
   const exportBtn = document.getElementById('settingsExportBtn');
   const importBtn = document.getElementById('settingsImportBtn');
   const importFile = document.getElementById('settingsImportFile');
+
+  // Blob ↔ base64 helpers. Using a data-URL round-trip is the simplest
+  // portable path that survives JSON serialization and preserves the
+  // MIME type without an extra field.
+  function _blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+  // dataUrlToBlob is defined near the top of this file (used by the old
+  // base64 → IndexedDB migration path) — reuse it here.
 
   async function exportData() {
     try {
@@ -1681,14 +2127,43 @@ siteDialogSave.addEventListener('click', async () => {
         data[key] = await store.get(key, null);
       }));
 
+      // Snapshot every photo blob so the images actually come back on
+      // import. Photos with no blob in IndexedDB are silently skipped —
+      // that includes the pre-migration base64 case, where the image
+      // data is already embedded in the `photos` array's `src` field.
+      const photoBlobs = {};
+      const photos = Array.isArray(data.photos) ? data.photos : [];
+      for (const p of photos) {
+        if (!p || !p.id) continue;
+        const blob = await mediaStore.getPhoto(p.id);
+        if (blob) {
+          try { photoBlobs[p.id] = await _blobToDataUrl(blob); }
+          catch (e) { /* skip unreadable blob */ }
+        }
+      }
+
+      // Custom background blob (single-slot).
+      let bgBlob = null;
+      const bgBlobRaw = await mediaStore.getBg();
+      if (bgBlobRaw) {
+        try { bgBlob = await _blobToDataUrl(bgBlobRaw); }
+        catch (e) { bgBlob = null; }
+      }
+
       const payload = {
         app: 'flash-dash',
-        version: 1,
+        version: 2,
         exportedAt: new Date().toISOString(),
-        data
+        data,
+        blobs: {
+          photos: photoBlobs,      // { photoId: dataUrl }
+          background: bgBlob       // dataUrl | null
+        }
       };
 
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      // Not pretty-printed — base64 image data is huge, and indentation
+      // multiplies the file size for no user-visible benefit.
+      const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const dateStamp = new Date().toISOString().slice(0, 10);
 
@@ -1700,7 +2175,13 @@ siteDialogSave.addEventListener('click', async () => {
       a.remove();
       URL.revokeObjectURL(url);
 
-      showAppToast('Backup Exported', 'Your data has been saved to a file.');
+      const nBlobs = Object.keys(photoBlobs).length + (bgBlob ? 1 : 0);
+      showAppToast(
+        'Backup Exported',
+        nBlobs
+          ? `Saved your data and ${nBlobs} image${nBlobs === 1 ? '' : 's'}.`
+          : 'Your data has been saved to a file.'
+      );
     } catch (err) {
       showAppToast('Export Failed', 'Something went wrong creating the backup.');
     }
@@ -1721,20 +2202,62 @@ siteDialogSave.addEventListener('click', async () => {
       showAppToast('Import Failed', 'This file doesn\'t look like a Flash Dash backup.');
       return;
     }
+    const blobs = parsed.blobs && typeof parsed.blobs === 'object' ? parsed.blobs : null;
+    const photoBlobs = blobs && blobs.photos && typeof blobs.photos === 'object' ? blobs.photos : {};
+    const bgDataUrl = blobs && typeof blobs.background === 'string' ? blobs.background : null;
 
     const confirmed = window.confirm(
-      'Importing will overwrite your current notes, photos, tasks, sites, countdowns, and widget positions with the contents of this file. This cannot be undone. Continue?'
+      'Importing will overwrite your current notes, photos, tasks, sites, countdowns, background, and widget positions with the contents of this file. This cannot be undone. Continue?'
     );
     if (!confirmed) return;
 
     try {
+      // 1) Clear existing photo blobs so orphaned images from the old
+      //    session don't linger in IndexedDB after the import overwrites
+      //    the `photos` array with a smaller / different set.
+      await mediaStore.clearPhotos();
+      await mediaStore.clearBg();
+
+      // 2) Restore the JSON side of the app state.
       await Promise.all(BACKUP_KEYS.map(async (key) => {
         if (Object.prototype.hasOwnProperty.call(data, key) && data[key] !== null) {
           await store.set(key, data[key]);
         }
       }));
-      showAppToast('Backup Imported', 'Reloading to apply your restored data…');
-      setTimeout(() => window.location.reload(), 1200);
+
+      // 3) Restore photo blobs into IndexedDB, keyed by photo id.
+      //    Old v1 backups won't have a `blobs` section — fall back to any
+      //    embedded `src` data-URL on the photo record itself (that's
+      //    the pre-migration format the app used to store photos in).
+      const importedPhotos = Array.isArray(data.photos) ? data.photos : [];
+      let restoredBlobs = 0;
+      for (const p of importedPhotos) {
+        if (!p || !p.id) continue;
+        let dataUrl = photoBlobs[p.id] || null;
+        if (!dataUrl && typeof p.src === 'string' && p.src.startsWith('data:')) {
+          dataUrl = p.src;
+        }
+        if (!dataUrl) continue;
+        const blob = dataUrlToBlob(dataUrl);
+        if (blob) {
+          await mediaStore.setPhoto(p.id, blob);
+          restoredBlobs++;
+        }
+      }
+
+      // 4) Restore the custom background blob if the file has one.
+      if (bgDataUrl) {
+        const blob = dataUrlToBlob(bgDataUrl);
+        if (blob) await mediaStore.setBg(blob);
+      }
+
+      showAppToast(
+        'Backup Imported',
+        restoredBlobs
+          ? `Restored your data and ${restoredBlobs} image${restoredBlobs === 1 ? '' : 's'}. Reloading…`
+          : 'Reloading to apply your restored data…'
+      );
+      setTimeout(() => window.location.reload(), 1400);
     } catch (err) {
       showAppToast('Import Failed', 'Something went wrong restoring the backup.');
     }
