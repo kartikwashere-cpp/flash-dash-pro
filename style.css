@@ -268,35 +268,146 @@ body {
   color: var(--bg);
 }
 
-/* Snap alignment guide lines — shown while dragging/resizing a photo
-   near the edge, center, or gap-spacing of another photo. */
+/* ── Snap alignment guides (Canva/Figma-style) ────────────────────────────────
+   Shown while dragging or resizing a photo. Lines are BOUNDED between
+   the moving photo and the involved neighbors (not span-full-viewport)
+   so multi-photo boards stay readable.
+
+   z-index is set to the CSS maximum (not just a big number) because
+   photos' own z-index grows without bound over a session (every
+   drag/resize/click bumps a shared counter via bringToFront) — anything
+   less than the max could eventually get buried behind a
+   heavily-interacted-with photo. */
+:root {
+  --snap-edge:   rgba(255, 66, 138, 0.95);  /* magenta — edge alignment */
+  --snap-center: rgba(122, 92, 255, 0.95);  /* violet  — center alignment */
+  --snap-size:   rgba(60, 200, 140, 0.95);  /* green   — equal size */
+  --snap-spacing:rgba(255, 66, 138, 0.85);
+  --snap-label-bg: rgba(255, 66, 138, 0.95);
+  --snap-label-fg: #fff;
+}
+[data-theme="light"] {
+  --snap-edge:   rgba(230, 30, 110, 0.95);
+  --snap-center: rgba(105, 70, 235, 0.95);
+  --snap-size:   rgba(20, 160, 100, 0.95);
+  --snap-spacing:rgba(230, 30, 110, 0.85);
+  --snap-label-bg: rgba(230, 30, 110, 0.95);
+  --snap-label-fg: #fff;
+}
+
 .snap-guide {
   position: fixed;
-  z-index: 9999;
+  z-index: 2147483647;
   pointer-events: none;
   background: none;
+  /* No entry animation — the renderer is now a keyed reconciler that
+     KEEPS the same DOM node across frames whenever a guide stays at the
+     same coordinates. Any entry animation here would re-trigger every
+     frame the guide's position changed (because the CSS animation is
+     tied to the element, not the coordinates) and cause visible flicker.
+     Instead, we let CSS `transition` fade positions smoothly. */
+  transition: opacity 120ms ease-out;
 }
 
-.snap-guide-x {
+/* Vertical alignment line (X-axis snap). The `height` and `top` are set
+   inline by JS so the line only spans the involved photos. */
+.snap-guide-v {
   width: 1px;
-  top: 0;
-  bottom: 0;
-  border-left: 1px dashed rgba(100, 180, 255, 0.55);
+  border-left: 1px solid var(--snap-edge);
+  box-shadow: 0 0 6px 0 var(--snap-edge);
 }
-
-.snap-guide-y {
+/* Horizontal alignment line (Y-axis snap). */
+.snap-guide-h {
   height: 1px;
-  left: 0;
-  right: 0;
-  border-top: 1px dashed rgba(100, 180, 255, 0.55);
+  border-top: 1px solid var(--snap-edge);
+  box-shadow: 0 0 6px 0 var(--snap-edge);
 }
 
-[data-theme="light"] .snap-guide-x {
-  border-left-color: rgba(0, 100, 220, 0.45);
+/* Center-alignment guides use the violet accent so users can tell at a
+   glance whether they've snapped to an edge or the center of a neighbor. */
+.snap-guide-center.snap-guide-v {
+  border-left-color: var(--snap-center);
+  box-shadow: 0 0 6px 0 var(--snap-center);
+}
+.snap-guide-center.snap-guide-h {
+  border-top-color: var(--snap-center);
+  box-shadow: 0 0 6px 0 var(--snap-center);
 }
 
-[data-theme="light"] .snap-guide-y {
-  border-top-color: rgba(0, 100, 220, 0.45);
+/* Tiny endcap dots at each end of a guide — rendered via ::before/::after
+   so the line clearly "terminates" at each involved photo, like Canva. */
+.snap-guide-v::before,
+.snap-guide-v::after,
+.snap-guide-h::before,
+.snap-guide-h::after {
+  content: '';
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  color: var(--snap-edge);
+}
+.snap-guide-center.snap-guide-v::before,
+.snap-guide-center.snap-guide-v::after,
+.snap-guide-center.snap-guide-h::before,
+.snap-guide-center.snap-guide-h::after {
+  color: var(--snap-center);
+}
+.snap-guide-v::before { left: -2px; top: -3px; }
+.snap-guide-v::after  { left: -2px; bottom: -3px; }
+.snap-guide-h::before { top: -2px; left: -3px; }
+.snap-guide-h::after  { top: -2px; right: -3px; }
+
+/* Dimension bracket — always shown for every photo during a resize (per
+   user request) so any potential width/height match is visible at a
+   glance, not just when it hits the snap threshold. The bracket sits
+   under the photo (for width) or to the right of it (for height) and
+   shows its size in pixels. The line is drawn with border only, and the
+   number sits on a small chip in the middle of that line so it reads on
+   any background — dark or light, image or solid color. */
+.snap-dim-bracket {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 500 10.5px/14px 'Inter', system-ui, sans-serif;
+  color: #0a4c30;
+  letter-spacing: 0.02em;
+  text-align: center;
+  box-sizing: border-box;
+  opacity: 0.92;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--snap-size);
+  border-radius: 3px;
+  padding: 0 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.snap-dim-w {
+  height: 16px;
+}
+.snap-dim-h {
+  width: 22px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 4px 0;
+}
+[data-theme="dark"] .snap-dim-bracket,
+:root:not([data-theme="light"]) .snap-dim-bracket {
+  background: rgba(15, 20, 15, 0.88);
+  color: #b8f0d0;
+}
+
+/* Equal-spacing badge ("= 24") shown in the gaps between the dragged photo
+   and its two collinear neighbors when spacing matches. */
+.snap-spacing-badge {
+  min-width: 24px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--snap-spacing);
+  color: #fff;
+  font: 500 11px/18px 'Inter', system-ui, sans-serif;
+  text-align: center;
 }
 
 /* ---------- board drag & drop overlay ---------- */
@@ -1356,6 +1467,63 @@ body {
   border-radius: 8px;
   background: var(--glass);
   font-size: 13px;
+  transition: opacity .15s, background .15s, box-shadow .15s, transform .15s;
+}
+
+/* Picked-up state: lifts and scales the row slightly with a real shadow,
+   so it clearly reads as "grabbed" rather than just a faint dim. */
+.task-item.task-dragging {
+  position: relative;
+  z-index: 5;
+  opacity: 0.96;
+  background: var(--glass-strong);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+  transform: scale(1.03);
+}
+
+[data-theme="light"] .task-item.task-dragging {
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.15);
+}
+
+/* While a task is being reordered, force the grabbing cursor everywhere
+   (not just over the handle) and block text selection — otherwise the
+   cursor flickers back to whatever's actually under the pointer as it
+   crosses other rows, which is the "glitchy" feeling during a drag. */
+body.task-reordering {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+body.task-reordering * {
+  cursor: grabbing !important;
+}
+
+/* Drag handle — grip dots, visible on row hover (same reveal pattern as
+   the × delete button) so the row doesn't look cluttered by default. */
+.task-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity .15s, color .15s;
+  touch-action: none;
+}
+
+.task-item:hover .task-drag-handle {
+  opacity: 0.55;
+}
+
+.task-drag-handle:hover {
+  opacity: 1;
+  color: var(--text);
+}
+
+.task-drag-handle:active {
+  cursor: grabbing;
 }
 
 .task-check {
@@ -2289,6 +2457,17 @@ body.focus-mode .stage {
    Welcome Overlay — first-install screen
 ══════════════════════════════════════════════════════════════ */
 
+/* ══════════════════════════════════════════════════════════════
+   Welcome Overlay — first-run splash screen (v2)
+   Two-panel layout:
+     • .welcome-hero on the left — brand mark, headline, primary "/"
+       shortcut callout, CTA, and privacy note.
+     • .welcome-features on the right — vertical feature list with
+       icon chip + title + description per row, staggered fade-in.
+   The card has an animated conic-gradient border (rendered as a
+   pseudo-element behind the card content) that slowly rotates,
+   giving the overlay a "living" feel without being distracting.
+════════════════════════════════════════════════════════════════ */
 #welcomeOverlay {
   position: fixed;
   inset: 0;
@@ -2296,13 +2475,15 @@ body.focus-mode .stage {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.78);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
-  /* hidden by default; JS shows it on first install */
+  background: radial-gradient(circle at 30% 20%, rgba(120, 90, 220, 0.35), transparent 60%),
+              radial-gradient(circle at 80% 80%, rgba(255, 90, 160, 0.28), transparent 55%),
+              rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.35s ease;
+  transition: opacity 0.4s ease;
+  padding: 24px;
 }
 
 #welcomeOverlay.visible {
@@ -2310,128 +2491,335 @@ body.focus-mode .stage {
   pointer-events: auto;
 }
 
-/* Fade-out animation triggered by JS before hiding */
 #welcomeOverlay.dismissing {
   opacity: 0;
   transform: scale(1.02);
   transition: opacity 0.4s ease, transform 0.4s ease;
 }
 
-/* Glassmorphic card */
+/* Card itself */
 .welcome-card {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  backdrop-filter: blur(32px);
-  -webkit-backdrop-filter: blur(32px);
-  border-radius: 28px;
-  padding: 40px 44px 36px;
-  max-width: 660px;
-  width: calc(100vw - 48px);
+  position: relative;
+  background: rgba(18, 18, 22, 0.72);
+  border-radius: 24px;
+  padding: 2px;                       /* space for the gradient border layer */
+  max-width: 920px;
+  width: 100%;
+  max-height: calc(100vh - 48px);
   box-shadow:
-    0 32px 80px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0;
-  /* Entrance animation */
-  animation: welcome-card-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    0 40px 100px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+  animation: welcome-card-in 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  overflow: hidden;
+  isolation: isolate;                 /* keeps the gradient border below the content */
+}
+
+/* Animated conic-gradient border — the border is drawn as a full-bleed
+   pseudo-element that slowly rotates behind the card body. The body
+   itself sits on top (via z-index) and covers the middle, so only a
+   thin colored ring shows around the edge. */
+.welcome-gradient-border {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background: conic-gradient(
+    from 0deg,
+    rgba(122, 92, 255, 0.9),
+    rgba(255, 92, 168, 0.9),
+    rgba(255, 200, 80, 0.85),
+    rgba(80, 220, 200, 0.85),
+    rgba(122, 92, 255, 0.9)
+  );
+  filter: blur(2px);
+  animation: welcome-border-spin 8s linear infinite;
+}
+
+@keyframes welcome-border-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 @keyframes welcome-card-in {
-  from {
-    opacity: 0;
-    transform: translateY(20px) scale(0.96);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+  from { opacity: 0; transform: translateY(24px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
 }
 
-/* Logo row */
+/* Inner layout — the content sits ABOVE the gradient border layer */
+.welcome-layout {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 5fr) minmax(300px, 6fr);
+  background: rgba(14, 14, 18, 0.94);
+  border-radius: 22px;
+  overflow: hidden;
+  min-height: 480px;
+}
+
+/* ---------- Hero panel (left) ---------- */
+.welcome-hero {
+  padding: 40px 36px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(122, 92, 255, 0.15), transparent 65%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 60%);
+}
+
 .welcome-logo {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 16px;
 }
 
 .welcome-logo-icon {
-  font-size: 36px;
+  font-size: 30px;
   line-height: 1;
-  filter: drop-shadow(0 0 12px rgba(255, 220, 80, 0.5));
+  filter: drop-shadow(0 0 14px rgba(255, 220, 120, 0.55));
 }
 
 .welcome-logo-text {
   font-family: 'Space Grotesk', sans-serif;
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.4px;
   color: var(--text);
 }
 
-/* Intro paragraph */
+.welcome-headline {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 42px;
+  line-height: 1.05;
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  color: var(--text);
+  margin: 8px 0 0;
+  background: linear-gradient(180deg, var(--text) 0%, rgba(255, 255, 255, 0.55) 130%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
 .welcome-intro {
-  font-size: 14.5px;
+  font-size: 14px;
   color: var(--text-dim);
-  text-align: center;
-  line-height: 1.65;
-  margin: 0 0 28px;
-  max-width: 480px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 340px;
 }
 
-/* Feature grid: 3 cols × 3 rows */
-.feature-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  width: 100%;
-  margin-bottom: 32px;
-}
-
-.feature-card {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 16px;
-  padding: 16px 14px 14px;
+/* Primary "/" shortcut callout — leads users to Settings first, since
+   every other feature can be discovered from there. */
+.welcome-shortcut {
+  margin-top: 6px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
-  cursor: default;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
-
-.feature-card:hover {
+.welcome-shortcut:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.18);
-  transform: translateY(-2px);
 }
-
-.feature-icon {
+.welcome-shortcut-key {
+  flex-shrink: 0;
+}
+.welcome-shortcut-key kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.06));
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.35),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 22px;
-  line-height: 1;
-  margin-bottom: 2px;
+  font-weight: 600;
+  color: var(--text);
 }
-
-.feature-title {
+.welcome-shortcut-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.welcome-shortcut-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.01em;
 }
-
-.feature-desc {
-  font-size: 11.5px;
+.welcome-shortcut-desc {
+  font-size: 12px;
   color: var(--text-dim);
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
+/* CTA button */
+.welcome-btn {
+  margin-top: 10px;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, #fff 0%, #eaeaf5 100%);
+  color: #16161c;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+.welcome-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+.welcome-btn:active {
+  transform: translateY(0) scale(0.98);
+}
+.welcome-btn svg {
+  transition: transform 0.18s ease;
+}
+.welcome-btn:hover svg {
+  transform: translateX(3px);
+}
+
+/* Privacy line */
+.welcome-privacy {
+  margin: auto 0 0;
+  padding-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  opacity: 0.75;
+}
+.welcome-privacy-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 8px #4ade80;
+  animation: welcome-dot-pulse 2.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes welcome-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.85); }
+}
+
+/* ---------- Feature panel (right) ---------- */
+.welcome-features {
+  padding: 32px 32px 32px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.welcome-features::-webkit-scrollbar { width: 6px; }
+.welcome-features::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.welcome-features-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.feature-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Each row — icon chip + copy stack. Staggered fade-in driven by --i */
+.feature-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+  opacity: 0;
+  transform: translateY(6px);
+  animation: welcome-row-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(0.28s + var(--i, 0) * 0.06s);
+}
+.feature-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.13);
+  transform: translateX(2px);
+}
+@keyframes welcome-row-in {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.feature-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(122, 92, 255, 0.22), rgba(255, 92, 168, 0.22));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.feature-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.feature-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+.feature-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
 .feature-desc kbd {
   font-family: inherit;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -2440,83 +2828,90 @@ body.focus-mode .stage {
   color: var(--text);
 }
 
-/* Dismiss CTA button */
-.welcome-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 13px 32px;
-  border-radius: 50px;
-  border: none;
-  background: var(--text);
-  color: var(--bg);
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: opacity 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
-}
-
-.welcome-btn:hover {
-  opacity: 0.88;
-  transform: translateY(-1px) scale(1.03);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
-}
-
-.welcome-btn:active {
-  transform: scale(0.98);
-}
-
-/* Privacy reassurance note below the CTA */
-.welcome-privacy {
-  margin: 16px 0 0;
-  font-size: 11.5px;
-  color: var(--text-dim);
-  text-align: center;
-  line-height: 1.5;
-  opacity: 0.75;
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-  width: 100%;
-}
-
-/* Light-theme adjustments for the overlay card */
+/* Light-theme adjustments */
 [data-theme="light"] #welcomeOverlay {
-  background: rgba(255, 255, 255, 0.72);
+  background: radial-gradient(circle at 30% 20%, rgba(120, 90, 220, 0.15), transparent 60%),
+              radial-gradient(circle at 80% 80%, rgba(255, 90, 160, 0.12), transparent 55%),
+              rgba(240, 240, 250, 0.82);
 }
-
 [data-theme="light"] .welcome-card {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: rgba(0, 0, 0, 0.1);
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.03) inset;
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.05) inset;
 }
-
-[data-theme="light"] .feature-card {
+[data-theme="light"] .welcome-layout {
+  background: rgba(255, 255, 255, 0.96);
+}
+[data-theme="light"] .welcome-hero {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(122, 92, 255, 0.08), transparent 65%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.02), transparent 60%);
+}
+[data-theme="light"] .welcome-features {
+  background: rgba(0, 0, 0, 0.02);
+  border-left-color: rgba(0, 0, 0, 0.07);
+}
+[data-theme="light"] .welcome-headline {
+  background: linear-gradient(180deg, var(--text) 0%, rgba(0, 0, 0, 0.55) 130%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="light"] .feature-row {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.07);
+}
+[data-theme="light"] .feature-row:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.14);
+}
+[data-theme="light"] .feature-icon {
+  background: linear-gradient(135deg, rgba(122, 92, 255, 0.14), rgba(255, 92, 168, 0.14));
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .feature-desc kbd,
+[data-theme="light"] .welcome-shortcut-key kbd {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .welcome-shortcut {
   background: rgba(0, 0, 0, 0.03);
   border-color: rgba(0, 0, 0, 0.08);
 }
-
-[data-theme="light"] .feature-card:hover {
-  background: rgba(0, 0, 0, 0.07);
-  border-color: rgba(0, 0, 0, 0.16);
+[data-theme="light"] .welcome-shortcut:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] .welcome-btn {
+  background: linear-gradient(135deg, #1a1a24 0%, #2a2a38 100%);
+  color: #fff;
 }
 
-[data-theme="light"] .feature-desc kbd {
-  background: rgba(0, 0, 0, 0.07);
-  border-color: rgba(0, 0, 0, 0.14);
-}
-
-/* Responsive: collapse to 2 cols on narrow viewports */
-@media (max-width: 540px) {
-  .feature-grid {
-    grid-template-columns: repeat(2, 1fr);
+/* Responsive: stack the two panels on narrow viewports */
+@media (max-width: 720px) {
+  .welcome-layout {
+    grid-template-columns: 1fr;
+    max-height: none;
   }
-
+  .welcome-hero {
+    padding: 28px 24px 20px;
+    gap: 14px;
+  }
+  .welcome-headline { font-size: 32px; }
+  .welcome-features {
+    padding: 24px;
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  [data-theme="light"] .welcome-features {
+    border-top-color: rgba(0, 0, 0, 0.07);
+  }
   .welcome-card {
-    padding: 28px 20px 24px;
-    border-radius: 20px;
+    max-height: calc(100vh - 32px);
+  }
+  .welcome-card > .welcome-layout {
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
   }
 }
 
