@@ -1466,6 +1466,20 @@ async function renderPhotoEl(photo) {
   wrap.style.width = photo.w + 'px';
   wrap.style.height = photo.h + 'px';
 
+  // One-shot rotated-ghost pop-in for photos that were just dropped from
+  // the OS. Add the class here and strip it after the animation ends so
+  // it doesn't leave any lingering styles behind on the element.
+  if (_droppedInPhotoIds.has(photo.id)) {
+    _droppedInPhotoIds.delete(photo.id);
+    wrap.classList.add('photo-dropped-in');
+    wrap.addEventListener('animationend', function _clean(ev) {
+      if (ev.animationName === 'photo-drop-pop') {
+        wrap.classList.remove('photo-dropped-in');
+        wrap.removeEventListener('animationend', _clean);
+      }
+    });
+  }
+
   // Apply persisted z-index (default to 2 if none saved yet)
   const savedZ = photo.z || 2;
   wrap.style.zIndex = savedZ;
@@ -1558,7 +1572,16 @@ renderBoard();
 // only lightweight metadata (id/x/y/w/h/z) in chrome.storage.local. Roughly
 // 33% smaller on disk than the old base64 path and dramatically faster to
 // load on subsequent page opens.
-async function addPhotoFiles(files) {
+// Track ids of photos that were just dropped from the OS, so renderBoard
+// can attach a one-shot rotated pop-in animation to their DOM node. The
+// set is drained the first time a matching photo element is rendered.
+const _droppedInPhotoIds = new Set();
+
+// `dropPoint`, if provided, is a {x, y} in viewport coordinates — the
+// spot where the OS drag was released on the board. When present we
+// place photos there (fanned out slightly for multi-file drops) instead
+// of using the anchored-random pickPlacement fallback.
+async function addPhotoFiles(files, dropPoint = null) {
   const imageFiles = [...files].filter(f => f.type.startsWith('image/'));
   if (imageFiles.length === 0) return;
 
@@ -1570,8 +1593,25 @@ async function addPhotoFiles(files) {
   const existingSnapshot = [...photos, ...notes];
   const w = 220, h = 220;
 
-  for (const file of imageFiles) {
-    const { x, y } = pickPlacement(existingSnapshot, w, h);
+  imageFiles.forEach((_, i) => { /* reserve indices for fan-out */ });
+
+  for (let i = 0; i < imageFiles.length; i++) {
+    const file = imageFiles[i];
+    let x, y;
+    if (dropPoint) {
+      // Center the photo on the drop point. If multiple files were dropped
+      // at once, fan them out in a small diagonal cascade so they don't
+      // stack invisibly on top of each other.
+      const offset = i * 24;
+      x = dropPoint.x - w / 2 + offset;
+      y = dropPoint.y - h / 2 + offset;
+      const margin = 20;
+      x = Math.max(margin, Math.min(window.innerWidth  - w - margin, x));
+      y = Math.max(margin, Math.min(window.innerHeight - h - margin, y));
+    } else {
+      const pos = pickPlacement(existingSnapshot, w, h);
+      x = pos.x; y = pos.y;
+    }
     _boardZCounter += 1;
     const id = Date.now() + Math.random().toString(36).slice(2);
     // The file object is already a Blob — store it directly; no FileReader,
@@ -1580,6 +1620,10 @@ async function addPhotoFiles(files) {
     const photo = { id, x, y, w, h, z: _boardZCounter };
     photos.push(photo);
     existingSnapshot.push(photo);
+    // Mark for one-shot pop-in animation when the board re-renders. Only
+    // drops from the OS get the rotated ghost-style entrance — file-picker
+    // additions still slide in via the default photo styling.
+    if (dropPoint) _droppedInPhotoIds.add(id);
   }
 
   await store.set('photos', photos);
@@ -1652,7 +1696,11 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   _dragDepth = 0;
   board.classList.remove('drag-active');
-  await addPhotoFiles(e.dataTransfer.files);
+  // Capture the drop point so the new photo(s) appear exactly where the
+  // user released them, then get the rotated glass-shadow pop-in — same
+  // aesthetic as the Stuff drawer's restore ghost.
+  const dropPoint = { x: e.clientX, y: e.clientY };
+  await addPhotoFiles(e.dataTransfer.files, dropPoint);
 });
 
 // ---------- Sticky Notes ----------
@@ -1784,6 +1832,8 @@ addNoteBtn.addEventListener('click', async () => {
 // ---------- Sites Drawer (manual quick-access launcher) ----------
 const sitesToggleBtn = document.getElementById('sitesToggleBtn');
 const sitesDrawer     = document.getElementById('sitesDrawer');
+// closeSitesDrawer button was removed from the UI — the drawer now closes
+// only by clicking outside, hover-out, or opening a different panel.
 const closeSitesDrawer = document.getElementById('closeSitesDrawer');
 const sitesGrid       = document.getElementById('sitesGrid');
 const sitesAddBtn     = document.getElementById('sitesAddBtn');
@@ -1822,11 +1872,13 @@ sitesToggleBtn.addEventListener('click', () => {
   if (!isOpen) loadSites();
 });
 
-closeSitesDrawer.addEventListener('click', () => {
-  clearTimeout(_sitesOpenTimer);
-  clearTimeout(_sitesCloseTimer);
-  sitesDrawer.classList.remove('open');
-});
+if (closeSitesDrawer) {
+  closeSitesDrawer.addEventListener('click', () => {
+    clearTimeout(_sitesOpenTimer);
+    clearTimeout(_sitesCloseTimer);
+    sitesDrawer.classList.remove('open');
+  });
+}
 
 document.addEventListener('click', (e) => {
   if (!sitesDrawer.contains(e.target) && !sitesToggleBtn.contains(e.target)) {
@@ -3085,6 +3137,18 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
   const saveBtn = document.getElementById('pomodoroDialogSave');
   const closeBtn = document.getElementById('pomodoroDialogClose');
 
+  // Fullscreen overlay refs — optional (fail gracefully if template is
+  // missing them; keeps this init function backwards-compatible).
+  const fsOverlay        = document.getElementById('pomodoroFullscreen');
+  const fsMode           = document.getElementById('pomodoroFsMode');
+  const fsTime           = document.getElementById('pomodoroFsTime');
+  const fsRingProgress   = document.getElementById('pomodoroFsRingProgress');
+  const fsStartPauseBtn  = document.getElementById('pomodoroFsStartPause');
+  const fsResetBtn       = document.getElementById('pomodoroFsReset');
+  const fsPresetsWrap    = document.getElementById('pomodoroFsPresets');
+  const expandBtn        = document.getElementById('pomodoroExpandBtn');
+  const collapseBtn      = document.getElementById('pomodoroCollapseBtn');
+
   if (!card) return;
 
   const RING_CIRCUMFERENCE = 326.7256; // 2 * PI * 52, matches the SVG r=52 circle
@@ -3177,7 +3241,22 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
 
   function applyModeVisuals() {
     card.classList.toggle('is-break', state.mode === 'break');
-    modeLabel.textContent = state.mode === 'focus' ? 'Focus Session' : 'Break Time';
+    const label = state.mode === 'focus' ? 'Focus Session' : 'Break Time';
+    modeLabel.textContent = label;
+    if (fsMode) fsMode.textContent = label;
+    if (fsOverlay) fsOverlay.classList.toggle('is-break', state.mode === 'break');
+    syncPresetHighlight();
+  }
+
+  // Highlight the preset button that matches the current focus duration
+  // (or clear all highlights if the value doesn't match any preset).
+  function syncPresetHighlight() {
+    if (!fsPresetsWrap) return;
+    const current = state ? state.focusMinutes : null;
+    fsPresetsWrap.querySelectorAll('.pomodoro-fs-preset').forEach(btn => {
+      const min = parseInt(btn.dataset.min, 10);
+      btn.classList.toggle('active', min === current);
+    });
   }
 
   // Switches focus<->break, starts the new session immediately if the
@@ -3245,17 +3324,20 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
     const timeStr = formatTime(remaining);
     if (timeStr !== _lastTimeStr) {
       timeEl.textContent = timeStr;
+      if (fsTime) fsTime.textContent = timeStr;
       _lastTimeStr = timeStr;
     }
     const fraction = Math.min(1, Math.max(0, 1 - remaining / state.duration));
     const dash = (RING_CIRCUMFERENCE * fraction).toFixed(2);
     if (dash !== _lastDashoffset) {
       ringProgress.style.strokeDashoffset = dash;
+      if (fsRingProgress) fsRingProgress.style.strokeDashoffset = dash;
       _lastDashoffset = dash;
     }
     const btnLabel = state.running ? 'Pause' : 'Start';
     if (btnLabel !== _lastBtnLabel) {
       startPauseBtn.textContent = btnLabel;
+      if (fsStartPauseBtn) fsStartPauseBtn.textContent = btnLabel;
       _lastBtnLabel = btnLabel;
     }
   }
@@ -3374,6 +3456,107 @@ function initFloatingWidget(key, el, toggleBtn, closeBtn, defaultWidthForX) {
       stopTicking();
     }
   });
+
+  // ──── Fullscreen expand / collapse ────
+  // Toggle the overlay open/closed. When open:
+  //   • Small floating card is hidden via body class
+  //   • Spacebar pauses/plays
+  //   • Escape collapses
+  // The timer state itself is shared — renderTick() writes to both DOMs
+  // in the same pass so the two views stay perfectly in sync.
+  function openFullscreen() {
+    if (!fsOverlay) return;
+    fsOverlay.classList.add('open');
+    fsOverlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('pomodoro-fs-open');
+    // Paint the current state onto the fullscreen DOM immediately so it
+    // doesn't briefly show default placeholders before the next tick.
+    _lastTimeStr = ''; _lastDashoffset = ''; _lastBtnLabel = '';
+    renderTick();
+    syncPresetHighlight();
+  }
+
+  function closeFullscreen() {
+    if (!fsOverlay) return;
+    fsOverlay.classList.remove('open');
+    fsOverlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('pomodoro-fs-open');
+  }
+
+  function isFullscreenOpen() {
+    return fsOverlay && fsOverlay.classList.contains('open');
+  }
+
+  if (expandBtn) {
+    expandBtn.addEventListener('click', (e) => {
+      // Don't let the click bubble up to the widget's drag handler.
+      e.stopPropagation();
+      openFullscreen();
+    });
+    // The card is a draggable floating widget — stop pointerdown from
+    // being interpreted as "start dragging the card" when the user
+    // clicks the expand button.
+    expandBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  }
+  if (collapseBtn) collapseBtn.addEventListener('click', closeFullscreen);
+
+  // Fullscreen mirror controls — delegate to the same toggle/reset paths
+  // so state, persistence, and chimes all flow through one code path.
+  if (fsStartPauseBtn) fsStartPauseBtn.addEventListener('click', () => { if (state) toggleStartPause(); });
+  if (fsResetBtn)      fsResetBtn.addEventListener('click',      () => { if (state) resetTimer();      });
+
+  // Time presets: clicking a preset sets focusMinutes AND immediately
+  // resets the timer to that new focus duration (idle state). Keeping
+  // this scoped to focus (not break) matches the mental model of
+  // "quick-pick a work session length".
+  if (fsPresetsWrap) {
+    fsPresetsWrap.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.pomodoro-fs-preset');
+      if (!btn || !state) return;
+      const min = parseInt(btn.dataset.min, 10);
+      if (!Number.isFinite(min) || min < 1) return;
+      state.focusMinutes = min;
+      state.mode = 'focus';
+      state.duration = min * 60;
+      state.running = false;
+      state.startedAt = null;
+      stopTicking();
+      await persist();
+      applyModeVisuals();
+      _lastTimeStr = ''; _lastDashoffset = ''; _lastBtnLabel = '';
+      renderTick();
+    });
+  }
+
+  // Keyboard shortcuts — active ONLY while the fullscreen overlay is
+  // open, so we don't grab Space or Escape globally when the user is
+  // just looking at the small card, typing in a note, editing tasks, etc.
+  document.addEventListener('keydown', (e) => {
+    if (!isFullscreenOpen() || !state) return;
+    // Ignore shortcuts while the user is typing in an input/textarea/
+    // contenteditable inside the overlay (there aren't any today, but
+    // this stays safe if someone adds one later).
+    const t = e.target;
+    const inField = t && (
+      t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable
+    );
+    if (inField) return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      toggleStartPause();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeFullscreen();
+    }
+  });
+
+  // Clicking the dimmed backdrop (but not the inner content) also closes.
+  if (fsOverlay) {
+    fsOverlay.addEventListener('click', (e) => {
+      if (e.target === fsOverlay) closeFullscreen();
+    });
+  }
 
   // Make this card a draggable, hideable floating widget.
   const closeWidgetBtn = document.getElementById('pomodoroCloseBtn');
