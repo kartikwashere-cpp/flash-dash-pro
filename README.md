@@ -1,4 +1,4 @@
-# ⚡ Flash Dash Pro
+# ⚡ Flash Dash
 
 > A beautiful, distraction-free new tab extension for Chrome. Big clock, Google search, a freeform photo/notes board with Canva-style alignment guides, tasks with drag-to-reorder, bookmarks, focus timer, and one-click backup — all in one sleek dashboard.
 
@@ -12,6 +12,22 @@
 ## Changelog
 
 **Latest**
+- **Stuff drawer — stash notes & photos off the board.** The Sites drawer now
+  has a second tab, **Stuff**, with a scrollable grid of everything you've
+  put away. To stash, drag any note or photo onto the Sites (chest) button;
+  the drawer opens toward you mid-drag with the Stuff tab already active,
+  and releasing over the button or the drawer sends the item into your
+  chest — the board loses it, storage keeps it. To restore, drag a stashed
+  tile out of the drawer onto the board; it lands where you release. Photo
+  blobs stay put in IndexedDB the whole time, so no data is re-encoded and
+  restore is instant. Included in Backup export/import (`stashedItems` +
+  stashed-photo blobs) so a stashed item survives a device switch.
+- **Journal — one-line-a-day.** New sidebar button opens a lightweight
+  dialog: type one line for today, autosaves on blur / Enter, and a
+  scrollable history of every past day lives underneath (click any past
+  line to edit inline, hover to reveal a delete button). Storage key
+  `journalEntries` is a plain `{ "YYYY-MM-DD": { text, updatedAt } }`
+  map, included in the standard backup file.
 - **Backup export / import now includes images.** The old exporter only serialized `chrome.storage`, so imported boards came back with photo positions but no image data. Photo blobs (from IndexedDB) and the custom background blob are now serialized as base64 into the backup JSON and restored to IndexedDB on import. Backup format bumped to `version: 2`; v1 files still import (empty `blobs` section falls back to any legacy `src` data-URL on each photo).
 - **Snap guides — Canva/Figma-style, reworked.**
   - Guide lines are now **bounded** to just the photos they align — they no longer span the entire viewport.
@@ -44,7 +60,9 @@
 | 🌙 **Theme** | Dark / light mode toggle + optional indigo overlay, persisted across tabs. |
 | ⏱️ **Focus Timer** | Pomodoro-style focus & break sessions, fully customizable. |
 | 🎨 **Custom Background** | Set an image (or video) as your board background — stored locally as a Blob in IndexedDB. |
-| 💾 **Backup & Restore** | Export everything (data + all images) to one JSON file, and import it back on a new install or device. |
+| 🧰 **Stuff Chest** | A second tab inside the Sites drawer that holds notes/photos you've dragged off the board. Drag any item onto the Sites button to stash it; drag a stashed tile back out to restore it. |
+| 📖 **Journal** | One-line-a-day reflection. New sidebar button opens a dialog with today's input + a scrollable history of every past day; entries autosave and are inline-editable. |
+| 💾 **Backup & Restore** | Export everything (data + all images + stash + journal) to one JSON file, and import it back on a new install or device. |
 | 👋 **Welcome Screen** | Redesigned first-install overlay that leads new users through all features. |
 
 ---
@@ -136,6 +154,8 @@ Flash Dash persists across two storage layers:
 | `tasks` | `Array<{id, text, done}>` | Task list |
 | `notes` | `Array<{id, text, x, y, w, h, color, z}>` | Sticky notes on the board |
 | `photos` | `Array<{id, x, y, w, h, z}>` | Photo positions/sizes (image blobs live in IndexedDB, keyed by `id`) |
+| `stashedItems` | `Array<StashedItem>` | Items in the Stuff drawer. Photo entries are `{id, kind:'photo', w, h, savedAt}` (blob stays in IDB under `id`); note entries are `{id, kind:'note', text, color, w, h, savedAt}` (fully self-contained). |
+| `journalEntries` | `{ "YYYY-MM-DD": { text, updatedAt } }` | One-line-a-day entries, keyed by local date. |
 | `customSites` | `Array<{title, url, iconUrl}>` | Custom pinned sites |
 | `countdownEvent` | `{ label, timestamp }` | Countdown widget target |
 | `pomodoroState` | `object` | Persistent Pomodoro timer state |
