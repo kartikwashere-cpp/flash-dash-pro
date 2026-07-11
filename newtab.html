@@ -115,6 +115,22 @@
             </li>
 
             <li class="feature-row" style="--i:5">
+              <span class="feature-icon">🧰</span>
+              <div class="feature-copy">
+                <span class="feature-title">Stuff Chest</span>
+                <span class="feature-desc">Drag a note or photo onto the <b>Sites</b> button to stash it away. Open <b>Stuff</b> in the drawer to drag it back anytime.</span>
+              </div>
+            </li>
+
+            <li class="feature-row" style="--i:6">
+              <span class="feature-icon">📖</span>
+              <div class="feature-copy">
+                <span class="feature-title">Journal</span>
+                <span class="feature-desc">One line a day — open the sidebar and pick <b>Journal</b> to look back on every day you’ve written.</span>
+              </div>
+            </li>
+
+            <li class="feature-row" style="--i:7">
               <span class="feature-icon">🎨</span>
               <div class="feature-copy">
                 <span class="feature-title">Make it yours</span>
@@ -269,6 +285,21 @@
           <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M8 2v6M16 2v6" />
         </svg>
       </button>
+
+      <!-- Journal — one-line-a-day reflection.
+           Follows the same grid rules described above: no manual
+           grid-row/grid-column; it drops into the next free vertical
+           slot automatically. -->
+      <button class="sidebar-icon-btn" id="journalToggleBtn" title="Journal">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <!-- Notebook silhouette (portrait): outer cover, spine binding,
+               and a single horizontal line to signal "one line a day". -->
+          <path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+          <path d="M4 7h2M4 11h2M4 15h2M4 19h2" opacity="0.85" />
+          <path d="M9 12h6" stroke-width="2" />
+        </svg>
+      </button>
     </div>
   </nav>
 
@@ -288,16 +319,59 @@
     </ul>
   </div>
 
-  <!-- Sites Drawer (manual quick-access launcher, replaces pinned shortcuts) -->
+  <!-- ═══════════════════════════════════════════════════════════
+       Sites Drawer — two tabbed panels in the same shell.
+         • Sites tab: manual quick-access launcher (up to 15 tiles).
+         • Stuff tab: stash for notes/photos dragged off the board.
+       Same drawer width; each panel manages its own scrolling.
+       Also serves as the drop target for the drag-to-stash flow —
+       hovering the Sites dock button while dragging a photo/note
+       opens this drawer, and releasing over the button (or drawer)
+       stashes the item into the Stuff panel.
+  ════════════════════════════════════════════════════════════ -->
   <div class="bookmarks-drawer sites-drawer" id="sitesDrawer">
     <div class="drawer-header">
-      <span class="drawer-title">Sites</span>
+      <div class="drawer-tabs" id="sitesDrawerTabs" role="tablist" aria-label="Sites drawer sections">
+        <button class="drawer-tab active" id="sitesTabSites"
+                role="tab" aria-selected="true" data-tab="sites">Sites</button>
+        <button class="drawer-tab" id="sitesTabStuff"
+                role="tab" aria-selected="false" data-tab="stuff">Stuff</button>
+      </div>
       <button id="closeSitesDrawer" class="drawer-close">&times;</button>
     </div>
-    <div class="sites-grid" id="sitesGrid">
-      <!-- Up to 15 site tiles rendered here -->
+
+    <!-- Sites tab panel — the original 3×5 grid of pinned sites. -->
+    <div class="drawer-tab-panel active" id="sitesPanelSites" role="tabpanel" aria-labelledby="sitesTabSites">
+      <div class="sites-grid" id="sitesGrid">
+        <!-- Up to 15 site tiles rendered here -->
+      </div>
+      <button class="sites-add-btn" id="sitesAddBtn">+ Add Site</button>
     </div>
-    <button class="sites-add-btn" id="sitesAddBtn">+ Add Site</button>
+
+    <!-- Stuff tab panel — scrollable list of stashed notes/photos.
+         Populated by renderStuffPanel(); each tile can be dragged back
+         onto the board (drop outside the drawer) or deleted forever. -->
+    <div class="drawer-tab-panel" id="sitesPanelStuff" role="tabpanel" aria-labelledby="sitesTabStuff">
+      <div class="stuff-list" id="stuffList">
+        <!-- Stashed item tiles rendered here -->
+      </div>
+      <div class="stuff-empty" id="stuffEmpty">
+        <div class="stuff-empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor"
+               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="9" width="16" height="10" rx="1" />
+            <rect x="4" y="9" width="16" height="4" rx="1" />
+            <rect x="10.5" y="13" width="3" height="2.4" rx="0.5" />
+            <path d="M4 9V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2" />
+          </svg>
+        </div>
+        <div class="stuff-empty-title">Your chest is empty</div>
+        <div class="stuff-empty-desc">
+          Drag a note or photo onto the <b>Sites</b> button to stash it here.
+          Drag it back out to put it on the board again.
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Site tile right-click context menu -->
@@ -444,6 +518,50 @@
   </div>
 
 
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Journal dialog — one-line-a-day reflection.
+       Reuses the shared .mini-dialog shell (see style.css) with a
+       taller layout: today's input at the top, past entries below.
+  ════════════════════════════════════════════════════════════ -->
+  <div class="mini-dialog-backdrop" id="journalBackdrop">
+    <div class="mini-dialog journal-dialog" id="journalDialog">
+      <div class="mini-dialog-head">
+        <span>Journal</span>
+        <button class="mini-dialog-close" id="journalClose">&times;</button>
+      </div>
+
+      <!-- Today row — big date + a single-line input.
+           Autosaves on blur / Enter, so there is no explicit Save button. -->
+      <div class="journal-today">
+        <div class="journal-today-head">
+          <span class="journal-today-label">Today</span>
+          <span class="journal-today-date" id="journalTodayDate">—</span>
+        </div>
+        <input type="text" id="journalTodayInput" class="journal-today-input"
+               placeholder="One line about today…" maxlength="160"
+               autocomplete="off" spellcheck="false" />
+        <div class="journal-today-meta">
+          <span class="journal-count" id="journalCount">0 / 160</span>
+          <span class="journal-saved" id="journalSaved"></span>
+        </div>
+      </div>
+
+      <!-- Past entries — scrollable list. Empty state shown when there
+           are no entries yet other than (optionally) today's. -->
+      <div class="journal-history-head">
+        <span class="journal-history-label">Past days</span>
+        <span class="journal-history-count" id="journalHistoryCount">0</span>
+      </div>
+      <div class="journal-history" id="journalHistory">
+        <!-- .journal-entry rows rendered by JS, most recent first -->
+      </div>
+      <div class="journal-empty" id="journalEmpty">
+        Once you write your first line, it lives here — one per day,
+        forever. Every entry is saved locally on your device.
+      </div>
+    </div>
+  </div>
 
   <!-- Add / Edit Site dialog -->
   <div class="mini-dialog-backdrop" id="siteDialogBackdrop">
