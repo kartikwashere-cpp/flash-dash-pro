@@ -1,4 +1,4 @@
-# ⚡ Flash Dash
+# ⚡ Flash Dash Pro
 
 > A beautiful, distraction-free new tab extension for Chrome. Big clock, Google search, a freeform photo/notes board with Canva-style alignment guides, tasks with drag-to-reorder, bookmarks, focus timer, and one-click backup — all in one sleek dashboard.
 
