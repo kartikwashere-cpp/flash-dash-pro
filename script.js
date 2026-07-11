@@ -701,7 +701,7 @@ themeToggle.addEventListener('contextmenu', async (e) => {
   // their action is performed — their own handlers (registered
   // elsewhere) run first, this just adds the "go back to the dock
   // afterwards" behavior on top.
-  const panelActionIds = ['addPhotoBtn', 'bookmarksToggle', 'pomodoroToggleBtn', 'countdownToggleBtn'];
+  const panelActionIds = ['addPhotoBtn', 'bookmarksToggle', 'pomodoroToggleBtn', 'countdownToggleBtn', 'journalToggleBtn'];
   panelActionIds.forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -726,11 +726,53 @@ const clearPhotosBtn = document.getElementById('clearPhotosBtn');
 // consistently no matter what kind of item the user last touched.
 let _boardZCounter = 10;
 
+// ══════════════════════════════════════════════════════════════
+// Stash-on-drop bootstrap
+// ──────────────────────────────────────────────────────────────
+// Photos and notes both use their own drag helpers (makePhotoInteractive
+// and makeDraggable) which run long before the Stuff module at the bottom
+// of this file has initialised. We publish a tiny controller stub here
+// that the Stuff module fills in later; buildStashHooks() below just
+// forwards to that stub, so a hook created early still "comes to life"
+// once Stuff init has run. Any drag that begins before Stuff init simply
+// gets a no-op stash (which is the correct fallback: nothing to stash to).
+const _stashController = {
+  begin: null,   // (kind, wrapEl, item)   -> void
+  move:  null,   // (x, y)                 -> void
+  end:   null    // (kind, wrapEl, item, x, y) -> bool (true = item was stashed)
+};
+
+function buildStashHooks(ctx) {
+  // ctx = { kind: 'photo'|'note', item, wrapEl }
+  // The returned object is what makePhotoInteractive/makeDraggable call
+  // on drag start/move/end. Each method is a thin wrapper that dispatches
+  // to _stashController if it's wired up, otherwise silently no-ops.
+  return {
+    begin(wrapEl) {
+      if (_stashController.begin) _stashController.begin(ctx.kind, wrapEl, ctx.item);
+    },
+    move(x, y) {
+      if (_stashController.move) _stashController.move(x, y);
+    },
+    end(x, y) {
+      if (!_stashController.end) return false;
+      return !!_stashController.end(ctx.kind, ctx.wrapEl, ctx.item, x, y);
+    }
+  };
+}
+
 // rAF-batched drag: pointermove events fire ~120-1000Hz on modern mice/
 // trackpads. Writing style.left/top synchronously on every event causes
 // layout thrashing and dropped frames; instead we coalesce multiple
 // moves into one paint per frame.
-function makeDraggable(el, item, onChange) {
+//
+// Stash-on-drop: an optional 4th argument identifies the item as a note
+// (or photo) so the shared "drop over Sites button = stash" flow (defined
+// far below in the Stuff module) can hook in. The drag helper itself
+// stays generic — it just publishes a small drag descriptor on
+// window.__activeBoardDrag while moving, and lets the Stuff module
+// consult that state on pointerup / pointermove via boardDragUpdate().
+function makeDraggable(el, item, onChange, stashHooks) {
   el.addEventListener('pointerdown', (e) => {
     // Skip drag-start for anything interactive — buttons, inputs, editable
     // text — so clicks on controls inside a draggable card/photo/note still
@@ -748,6 +790,9 @@ function makeDraggable(el, item, onChange) {
     el.setPointerCapture(e.pointerId);
     el.style.cursor = 'grabbing';
 
+    // Announce the drag to the Stuff module (no-op if it hasn't loaded yet).
+    if (stashHooks) stashHooks.begin(el);
+
     let pendingX = item.x, pendingY = item.y;
     let rafId = 0;
     const flush = () => {
@@ -763,14 +808,20 @@ function makeDraggable(el, item, onChange) {
       item.x = pendingX;
       item.y = pendingY;
       if (!rafId) rafId = requestAnimationFrame(flush);
+      if (stashHooks) stashHooks.move(ev.clientX, ev.clientY);
     }
-    function up() {
+    function up(ev) {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
       if (rafId) { cancelAnimationFrame(rafId); flush(); }
       el.style.cursor = 'grab';
-      onChange();
+      // If the drop landed on the Sites stash target, tryStash() takes
+      // over: it removes the item from storage + DOM and returns true.
+      // In that case we intentionally SKIP onChange() so we don't
+      // re-persist a phantom position for something we just deleted.
+      const stashed = stashHooks ? stashHooks.end(ev ? ev.clientX : null, ev ? ev.clientY : null) : false;
+      if (!stashed) onChange();
     }
     el.addEventListener('pointermove', move, { passive: true });
     el.addEventListener('pointerup', up);
@@ -1214,7 +1265,7 @@ function computeSnap(dragRect, others) {
 // deferred into a single requestAnimationFrame callback per frame, so a
 // fast mouse/trackpad firing many pointermove events between paints only
 // costs one snap check and one style write per frame, not one per event.
-function makePhotoInteractive(el, photo, onChange) {
+function makePhotoInteractive(el, photo, onChange, stashHooks) {
   let interacting = false;
 
   // Hover-only cursor feedback (skipped while an interaction is in progress
@@ -1314,11 +1365,17 @@ function makePhotoInteractive(el, photo, onChange) {
       el.style.height = photo.h + 'px';
     };
 
+    // Same stash-on-drop bookkeeping as makeDraggable — only relevant
+    // when the interaction is a drag (dir === null). Resizes skip it.
+    const isDrag = !dir;
+    if (isDrag && stashHooks) stashHooks.begin(el);
+
     function move(ev) {
       latestEv = ev;
       if (!rafId) rafId = requestAnimationFrame(flush);
+      if (isDrag && stashHooks) stashHooks.move(ev.clientX, ev.clientY);
     }
-    function up() {
+    function up(ev) {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
@@ -1326,7 +1383,11 @@ function makePhotoInteractive(el, photo, onChange) {
       interacting = false;
       if (!dir) el.style.cursor = 'grab';
       clearSnapGuides();
-      onChange();
+      // See makeDraggable for the rationale — stashed photos skip persist.
+      const stashed = (isDrag && stashHooks)
+        ? stashHooks.end(ev ? ev.clientX : null, ev ? ev.clientY : null)
+        : false;
+      if (!stashed) onChange();
     }
 
     if (!dir) el.style.cursor = 'grabbing';
@@ -1443,7 +1504,10 @@ async function renderPhotoEl(photo) {
   // Photos get the edge-resize + snap-to-neighbor system (any border,
   // not just a corner handle); notes keep the simpler drag/corner-resize
   // pair since they don't participate in the photo snap grid.
-  makePhotoInteractive(wrap, photo, persist);
+  // Wire in drop-to-stash: dragging this photo onto the Sites dock button
+  // (or the drawer, if it's already open) will move it into the Stuff panel
+  // instead of just repositioning it.
+  makePhotoInteractive(wrap, photo, persist, buildStashHooks({ kind: 'photo', item: photo, wrapEl: wrap }));
 }
 
 // One-time migration: if the saved photos array still contains inline
@@ -1540,12 +1604,14 @@ clearPhotosBtn.addEventListener('click', async () => {
   const confirmed = confirm(`Remove all ${total} item${total === 1 ? '' : 's'} (photos & notes) from the board?`);
   if (!confirmed) return;
 
-  // Also wipe blob storage so we don't leak orphan blobs in IndexedDB,
-  // and revoke any currently-minted object URLs.
+  // Wipe ONLY the on-board photo blobs, not the full `photos` IDB store —
+  // stashed photos live in the same store keyed by their id, and blowing
+  // it away would silently delete every image in the Stuff drawer too.
+  const boardPhotoIds = photos.map(p => p.id).filter(Boolean);
   await Promise.all([
     store.set('photos', []),
     store.set('notes', []),
-    mediaStore.clearPhotos()
+    ...boardPhotoIds.map(id => mediaStore.deletePhoto(id))
   ]);
   for (const id of _photoObjectUrls.keys()) _revokePhotoUrl(id);
   renderBoard();
@@ -1675,7 +1741,10 @@ function renderNoteEl(note) {
 
   wrap.addEventListener('pointerdown', () => bringToFront(wrap, note, persist));
 
-  makeDraggable(wrap, note, persist);
+  // Drop-to-stash: dragging this note onto the Sites dock button (or the
+  // already-open drawer) moves it into the Stuff panel instead of just
+  // repositioning it on the board.
+  makeDraggable(wrap, note, persist, buildStashHooks({ kind: 'note', item: note, wrapEl: wrap }));
   makeResizable(wrap, resize, note, persist, 160, 130);
 
   return wrap;
@@ -2093,6 +2162,8 @@ siteDialogSave.addEventListener('click', async () => {
   const BACKUP_KEYS = [
     // Board & content
     'notes', 'photos', 'tasks', 'customSites', 'countdownEvent',
+    // Stashed items (Stuff drawer) + one-line-a-day journal
+    'stashedItems', 'journalEntries',
     // Theme & appearance
     'theme', 'indigoEnabled', 'backgroundSettings',
     // Clock
@@ -2131,6 +2202,11 @@ siteDialogSave.addEventListener('click', async () => {
       // import. Photos with no blob in IndexedDB are silently skipped —
       // that includes the pre-migration base64 case, where the image
       // data is already embedded in the `photos` array's `src` field.
+      //
+      // Stashed photos (living in the Stuff drawer) also keep their blobs
+      // in the same IDB `photos` store — they are not in the `photos`
+      // array, so we walk `stashedItems` too and include their blobs, or
+      // the images would come back missing after an import.
       const photoBlobs = {};
       const photos = Array.isArray(data.photos) ? data.photos : [];
       for (const p of photos) {
@@ -2139,6 +2215,16 @@ siteDialogSave.addEventListener('click', async () => {
         if (blob) {
           try { photoBlobs[p.id] = await _blobToDataUrl(blob); }
           catch (e) { /* skip unreadable blob */ }
+        }
+      }
+      const stashed = Array.isArray(data.stashedItems) ? data.stashedItems : [];
+      for (const s of stashed) {
+        if (!s || s.kind !== 'photo' || !s.id) continue;
+        if (photoBlobs[s.id]) continue; // already snapshotted (shouldn't overlap, but be safe)
+        const blob = await mediaStore.getPhoto(s.id);
+        if (blob) {
+          try { photoBlobs[s.id] = await _blobToDataUrl(blob); }
+          catch (e) { /* skip */ }
         }
       }
 
@@ -2229,6 +2315,8 @@ siteDialogSave.addEventListener('click', async () => {
       //    Old v1 backups won't have a `blobs` section — fall back to any
       //    embedded `src` data-URL on the photo record itself (that's
       //    the pre-migration format the app used to store photos in).
+      //    Also restore blobs for stashed photos (Stuff drawer) so they
+      //    still render as thumbnails after the import.
       const importedPhotos = Array.isArray(data.photos) ? data.photos : [];
       let restoredBlobs = 0;
       for (const p of importedPhotos) {
@@ -2241,6 +2329,17 @@ siteDialogSave.addEventListener('click', async () => {
         const blob = dataUrlToBlob(dataUrl);
         if (blob) {
           await mediaStore.setPhoto(p.id, blob);
+          restoredBlobs++;
+        }
+      }
+      const importedStashed = Array.isArray(data.stashedItems) ? data.stashedItems : [];
+      for (const s of importedStashed) {
+        if (!s || s.kind !== 'photo' || !s.id) continue;
+        const dataUrl = photoBlobs[s.id];
+        if (!dataUrl) continue;
+        const blob = dataUrlToBlob(dataUrl);
+        if (blob) {
+          await mediaStore.setPhoto(s.id, blob);
           restoredBlobs++;
         }
       }
@@ -4263,4 +4362,752 @@ document.addEventListener('visibilitychange', () => {
     indigoActive = document.documentElement.getAttribute('data-indigo') === 'true';
     applyColor();
   })();
+})();
+
+// ══════════════════════════════════════════════════════════════════════
+// Stuff Drawer — stash notes / photos off the board
+// ─────────────────────────────────────────────────────────────────────
+// This module owns everything about the "Stuff" tab inside the existing
+// Sites drawer:
+//   • Drawer tab switching (Sites ↔ Stuff)
+//   • The stashedItems storage schema
+//   • The drop-target flow that hooks into a live board-item drag:
+//     drag a photo or note over the Sites dock button and release, and
+//     it's removed from the board and appears in the Stuff tab instead.
+//   • The reverse flow: grab a stashed tile, drag it OUT of the drawer,
+//     and it lands back on the board where you released it.
+//
+// Storage schema (chrome.storage.local key 'stashedItems'):
+//   Array<StashedItem>
+//   StashedItem = one of:
+//     • Photo: { id, kind: 'photo', w, h, savedAt }
+//         The image blob stays in IndexedDB under the same `id` in the
+//         `photos` object store. Nothing else changes — the photo just
+//         drops out of the `photos` array while it's stashed.
+//     • Note:  { id, kind: 'note', text, color, w, h, savedAt }
+//         Fully self-contained; notes are small so we keep everything
+//         inline rather than adding another object store.
+//
+// The drop target is the whole "Sites" dock button; the drawer already
+// opens on hover, so a user dragging an item toward the button will see
+// the drawer expand mid-drag and can either release on the button OR
+// keep going into the drawer body and release there. Both work.
+// ══════════════════════════════════════════════════════════════════════
+(function initStuff() {
+  // ── DOM handles ───────────────────────────────────────────────────
+  const drawer      = document.getElementById('sitesDrawer');
+  const dockBtn     = document.getElementById('sitesToggleBtn');
+  const tabsBar     = document.getElementById('sitesDrawerTabs');
+  const tabSites    = document.getElementById('sitesTabSites');
+  const tabStuff    = document.getElementById('sitesTabStuff');
+  const panelSites  = document.getElementById('sitesPanelSites');
+  const panelStuff  = document.getElementById('sitesPanelStuff');
+  const list        = document.getElementById('stuffList');
+
+  if (!drawer || !tabsBar || !list) return; // defensive; template must be present
+
+  // ── Tab switching ────────────────────────────────────────────────
+  function setActiveTab(name) {
+    const isSites = name === 'sites';
+    tabSites.classList.toggle('active', isSites);
+    tabStuff.classList.toggle('active', !isSites);
+    tabSites.setAttribute('aria-selected', String(isSites));
+    tabStuff.setAttribute('aria-selected', String(!isSites));
+    panelSites.classList.toggle('active', isSites);
+    panelStuff.classList.toggle('active', !isSites);
+    if (!isSites) renderStuff(); // refresh on entry so it's always current
+  }
+  tabSites.addEventListener('click', () => setActiveTab('sites'));
+  tabStuff.addEventListener('click', () => setActiveTab('stuff'));
+
+  // ── Storage helpers ──────────────────────────────────────────────
+  async function loadStashed()          { return await store.get('stashedItems', []); }
+  async function saveStashed(items)     { return await store.set('stashedItems', items); }
+
+  // ── Rendering ────────────────────────────────────────────────────
+  // Object URLs for stashed-photo thumbnails. Separate from the board's
+  // _photoObjectUrls map so we don't accidentally revoke one while the
+  // other is still using it (a photo can be stashed then re-added later,
+  // during which time both maps might briefly hold the same id — we
+  // want each map's lifecycle to be independent).
+  const _stashObjectUrls = new Map();
+  function _revokeStashUrl(id) {
+    const url = _stashObjectUrls.get(id);
+    if (url) { URL.revokeObjectURL(url); _stashObjectUrls.delete(id); }
+  }
+  function _revokeAllStashUrls() {
+    for (const id of _stashObjectUrls.keys()) _revokeStashUrl(id);
+  }
+
+  async function renderStuff() {
+    const items = await loadStashed();
+    // Newest first so recently-stashed things are always in reach.
+    const sorted = [...items].sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+
+    _revokeAllStashUrls();
+    list.innerHTML = '';
+
+    for (const item of sorted) {
+      list.appendChild(await buildTile(item));
+    }
+  }
+
+  async function buildTile(item) {
+    const tile = document.createElement('div');
+    tile.className = 'stuff-tile ' + (item.kind === 'note' ? 'stuff-tile-note ' : 'stuff-tile-photo ');
+    if (item.kind === 'note') tile.classList.add('stuff-color-' + (item.color || 'yellow'));
+    tile.dataset.id = item.id;
+    tile.dataset.kind = item.kind;
+    tile.title = item.kind === 'note' ? 'Note — drag out to restore' : 'Photo — drag out to restore';
+
+    if (item.kind === 'photo') {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.decoding = 'async';
+      const blob = await mediaStore.getPhoto(item.id);
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        _stashObjectUrls.set(item.id, url);
+        img.src = url;
+      }
+      tile.appendChild(img);
+    } else {
+      // Note tile — text preview only.
+      const preview = document.createElement('div');
+      preview.className = 'stuff-note-preview';
+      const t = (item.text || '').trim();
+      if (t) {
+        preview.textContent = t;
+      } else {
+        preview.classList.add('stuff-note-empty');
+        preview.textContent = 'Empty note';
+      }
+      tile.appendChild(preview);
+    }
+
+    // Delete-forever button (top-right). Confirms first because this is
+    // destructive — the blob (for photos) is dropped from IndexedDB too.
+    const del = document.createElement('button');
+    del.className = 'stuff-tile-del';
+    del.textContent = '×';
+    del.title = 'Delete forever';
+    del.setAttribute('aria-label', 'Delete this stashed item');
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const label = item.kind === 'note' ? 'this stashed note' : 'this stashed photo';
+      if (!confirm(`Delete ${label} permanently? This can't be undone.`)) return;
+      await removeStashed(item.id, /*alsoDeleteBlob*/ true);
+      _revokeStashUrl(item.id);
+      renderStuff();
+    });
+    tile.appendChild(del);
+
+    // Drag-out-to-restore: pointerdown on the tile starts a ghost drag.
+    // If released outside the drawer, restore to board; if inside, cancel.
+    tile.addEventListener('pointerdown', (e) => {
+      if (e.button > 0) return;
+      if (e.target.closest('.stuff-tile-del')) return;
+      startRestoreDrag(e, tile, item);
+    });
+
+    return tile;
+  }
+
+  async function removeStashed(id, alsoDeleteBlob) {
+    const items = await loadStashed();
+    const filtered = items.filter(x => x.id !== id);
+    await saveStashed(filtered);
+    if (alsoDeleteBlob) {
+      // Only photos have a blob in IDB.
+      const target = items.find(x => x.id === id);
+      if (target && target.kind === 'photo') {
+        await mediaStore.deletePhoto(id);
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Drop-to-stash flow
+  // ─────────────────────────────────────────────────────────────────
+  // A board-item drag is in progress. On pointerdown of the item, the
+  // photo / note drag helper calls _controller.begin(). We publish
+  // "stashing is possible" via a body class (so CSS lights up the Sites
+  // button), then on every pointermove we test whether the cursor is
+  // over the stash drop zone and toggle a hot state. On pointerup, if
+  // the cursor is in the drop zone, we perform the stash and RETURN
+  // TRUE to the drag helper — that tells it to skip its usual "persist
+  // updated position" step, because we've just removed the item from
+  // storage entirely.
+  //
+  // The Sites drawer already auto-opens on hover of the button; that
+  // works to our advantage — a user dragging a photo toward the button
+  // gets the drawer expanding to meet them, and can drop anywhere
+  // inside the button+drawer combined footprint.
+  // ══════════════════════════════════════════════════════════════════
+  let hotSurface = null; // 'button' | 'drawer' | null — the currently-hot drop target
+  let dragCtx    = null; // {kind, wrapEl, item} for the drag in progress
+  // Delay a hover-based drawer open by a couple of frames so a fast
+  // fly-by doesn't pop the drawer mid-drag when the user is just
+  // dragging past the button.
+  let hoverOpenTimer = null;
+  const DRAG_HOVER_OPEN_DELAY = 220; // ms
+
+  function pointIsOverButton(x, y) {
+    if (x == null || y == null) return false;
+    const r = dockBtn.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+  function pointIsOverDrawer(x, y) {
+    if (x == null || y == null) return false;
+    if (!drawer.classList.contains('open')) return false;
+    const r = drawer.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
+  function setHot(surface) {
+    if (hotSurface === surface) return;
+    if (hotSurface === 'button') dockBtn.classList.remove('stash-hot');
+    if (hotSurface === 'drawer') drawer.classList.remove('stash-hot');
+    hotSurface = surface;
+    if (surface === 'button') dockBtn.classList.add('stash-hot');
+    if (surface === 'drawer') drawer.classList.add('stash-hot');
+  }
+
+  _stashController.begin = function begin(kind, wrapEl, item) {
+    dragCtx = { kind, wrapEl, item };
+    document.body.classList.add('stashing-active');
+  };
+
+  _stashController.move = function move(x, y) {
+    if (!dragCtx) return;
+    if (pointIsOverButton(x, y)) {
+      setHot('button');
+      // Not open yet? Trigger the same hover-open as a stationary hover.
+      if (!drawer.classList.contains('open') && !hoverOpenTimer) {
+        hoverOpenTimer = setTimeout(() => {
+          hoverOpenTimer = null;
+          // Only open if we're still hot on the button — user may have moved on.
+          if (hotSurface === 'button') {
+            drawer.classList.add('open');
+            // When the drawer opens mid-drag, jump straight to the Stuff
+            // tab so the user sees where their item will land.
+            setActiveTab('stuff');
+          }
+        }, DRAG_HOVER_OPEN_DELAY);
+      }
+    } else if (pointIsOverDrawer(x, y)) {
+      setHot('drawer');
+      // Any time the pointer is inside the (open) drawer during a stash
+      // drag, make sure the Stuff tab is showing so the drop is meaningful.
+      if (!panelStuff.classList.contains('active')) setActiveTab('stuff');
+    } else {
+      setHot(null);
+      if (hoverOpenTimer) { clearTimeout(hoverOpenTimer); hoverOpenTimer = null; }
+    }
+  };
+
+  _stashController.end = function end(kind, wrapEl, item, x, y) {
+    const wasOverStash = pointIsOverButton(x, y) || pointIsOverDrawer(x, y);
+    // Always clean up the visual state, regardless of whether we stash.
+    document.body.classList.remove('stashing-active');
+    setHot(null);
+    if (hoverOpenTimer) { clearTimeout(hoverOpenTimer); hoverOpenTimer = null; }
+    dragCtx = null;
+
+    if (!wasOverStash) return false;
+
+    // Perform the actual stash. This is async but we can't await here
+    // (the drag helper is sync), so we fire-and-forget. The DOM removal
+    // of the wrap happens synchronously below so there's no flicker
+    // where the item briefly reappears on the board before disappearing.
+    performStash(kind, wrapEl, item).catch(err => {
+      console.error('[flash-dash] stash failed', err);
+    });
+    return true;
+  };
+
+  async function performStash(kind, wrapEl, item) {
+    // 1) Remove the wrap element from the board so the user sees it vanish
+    //    right at the moment they released the pointer.
+    if (wrapEl && wrapEl.parentNode) wrapEl.parentNode.removeChild(wrapEl);
+
+    // 2) Persist the change: pull from the source array, push onto stashed.
+    if (kind === 'photo') {
+      const [photos, stashed] = await Promise.all([
+        store.get('photos', []),
+        loadStashed()
+      ]);
+      const idx = photos.findIndex(p => p.id === item.id);
+      const src = idx > -1 ? photos[idx] : item;
+      // Remove from board array (but LEAVE the blob in IDB — it stays
+      // keyed by the same id so we can restore it later).
+      const newPhotos = photos.filter(p => p.id !== item.id);
+      const stashedItem = {
+        id: src.id,
+        kind: 'photo',
+        w: src.w,
+        h: src.h,
+        savedAt: Date.now()
+      };
+      stashed.push(stashedItem);
+      await Promise.all([
+        store.set('photos', newPhotos),
+        saveStashed(stashed)
+      ]);
+    } else if (kind === 'note') {
+      const [notes, stashed] = await Promise.all([
+        store.get('notes', []),
+        loadStashed()
+      ]);
+      const idx = notes.findIndex(n => n.id === item.id);
+      const src = idx > -1 ? notes[idx] : item;
+      const newNotes = notes.filter(n => n.id !== item.id);
+      const stashedItem = {
+        id: src.id,
+        kind: 'note',
+        text: src.text || '',
+        color: src.color || 'yellow',
+        w: src.w,
+        h: src.h,
+        savedAt: Date.now()
+      };
+      stashed.push(stashedItem);
+      await Promise.all([
+        store.set('notes', newNotes),
+        saveStashed(stashed)
+      ]);
+    }
+
+    // 3) If the Stuff panel is visible, re-render it so the new tile
+    //    appears immediately. If not, it'll refresh next time the user
+    //    opens it (renderStuff is also called on tab switch).
+    if (panelStuff.classList.contains('active')) {
+      renderStuff();
+    }
+
+    // 4) Small confirmation so the stash is unambiguous, especially
+    //    when the drawer wasn't open at drop time.
+    showAppToast(
+      'Stashed',
+      kind === 'note' ? 'Note saved to your chest.' : 'Photo saved to your chest.'
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Restore-from-stash flow
+  // ─────────────────────────────────────────────────────────────────
+  // Pointerdown on a tile starts a lightweight "ghost" drag: a floating
+  // preview follows the cursor everywhere, and on release we test
+  // whether the pointer is OUTSIDE the drawer — if so, restore to
+  // board at that position; if not, do nothing (cancel).
+  // ══════════════════════════════════════════════════════════════════
+  let restoreCtx = null;
+
+  function startRestoreDrag(e, tile, item) {
+    e.preventDefault();
+    if (restoreCtx) return; // one at a time
+
+    // Build the floating ghost. We snapshot the tile's current visuals
+    // so the drag preview mirrors what the user grabbed.
+    const ghost = document.createElement('div');
+    ghost.className = 'stuff-drag-ghost';
+    if (item.kind === 'photo') {
+      // Use the same object URL the tile is already displaying.
+      const tileImg = tile.querySelector('img');
+      if (tileImg && tileImg.src) {
+        const img = document.createElement('img');
+        img.src = tileImg.src;
+        ghost.appendChild(img);
+      }
+      ghost.style.width  = '120px';
+      ghost.style.height = '120px';
+    } else {
+      ghost.classList.add('is-note', 'stuff-tile-note', 'stuff-color-' + (item.color || 'yellow'));
+      const preview = document.createElement('div');
+      preview.className = 'stuff-note-preview';
+      const t = (item.text || '').trim();
+      preview.textContent = t || 'Empty note';
+      if (!t) preview.classList.add('stuff-note-empty');
+      ghost.appendChild(preview);
+      ghost.style.width  = '140px';
+      ghost.style.height = '110px';
+    }
+    ghost.style.left = e.clientX + 'px';
+    ghost.style.top  = e.clientY + 'px';
+    document.body.appendChild(ghost);
+    tile.classList.add('stuff-tile-dragging');
+
+    restoreCtx = { tile, item, ghost, move: null, up: null };
+
+    restoreCtx.move = function move(ev) {
+      ghost.style.left = ev.clientX + 'px';
+      ghost.style.top  = ev.clientY + 'px';
+    };
+    restoreCtx.up = async function up(ev) {
+      const ctx = restoreCtx;
+      if (!ctx) return;
+      document.removeEventListener('pointermove', ctx.move);
+      document.removeEventListener('pointerup', ctx.up);
+      document.removeEventListener('pointercancel', ctx.up);
+      ctx.tile.classList.remove('stuff-tile-dragging');
+      ctx.ghost.remove();
+      restoreCtx = null;
+
+      const x = ev ? ev.clientX : 0, y = ev ? ev.clientY : 0;
+      // Cancel restore if released back on top of the drawer.
+      if (pointIsOverDrawer(x, y) || pointIsOverButton(x, y)) return;
+
+      await performRestore(ctx.item, x, y);
+    };
+
+    document.addEventListener('pointermove', restoreCtx.move, { passive: true });
+    document.addEventListener('pointerup', restoreCtx.up);
+    document.addEventListener('pointercancel', restoreCtx.up);
+  }
+
+  async function performRestore(item, x, y) {
+    // Coordinates are viewport-based; the board itself covers the
+    // whole viewport, so we can use them directly. We center the item
+    // on the release point, then clamp to a reasonable margin so it
+    // never lands off-screen.
+    const w = item.w || (item.kind === 'note' ? 220 : 220);
+    const h = item.h || (item.kind === 'note' ? 200 : 220);
+    const margin = 20;
+    let placedX = Math.round(x - w / 2);
+    let placedY = Math.round(y - h / 2);
+    placedX = Math.max(margin, Math.min(window.innerWidth  - w - margin, placedX));
+    placedY = Math.max(margin, Math.min(window.innerHeight - h - margin, placedY));
+
+    // Bump the shared z-counter so the restored item lands on top.
+    _boardZCounter += 1;
+
+    if (item.kind === 'photo') {
+      const photos = await store.get('photos', []);
+      const restored = { id: item.id, x: placedX, y: placedY, w, h, z: _boardZCounter };
+      photos.push(restored);
+      await store.set('photos', photos);
+      // The blob is still in IDB under the same id — no extra work needed.
+      renderPhotoEl(restored);
+    } else {
+      const notes = await store.get('notes', []);
+      const restored = {
+        id: item.id,
+        text: item.text || '',
+        color: item.color || 'yellow',
+        x: placedX, y: placedY, w, h,
+        z: _boardZCounter
+      };
+      notes.push(restored);
+      await store.set('notes', notes);
+      renderNoteEl(restored);
+    }
+
+    // Remove from stash (blob stays where it is; the board owns it now).
+    await removeStashed(item.id, /*alsoDeleteBlob*/ false);
+    _revokeStashUrl(item.id);
+    renderStuff();
+
+    showAppToast(
+      'Restored',
+      item.kind === 'note' ? 'Note is back on your board.' : 'Photo is back on your board.'
+    );
+  }
+
+  // Defensive: if the user alt-tabs mid-restore, kill the ghost so it
+  // doesn't get stuck onscreen.
+  window.addEventListener('blur', () => {
+    if (restoreCtx && restoreCtx.up) restoreCtx.up(null);
+  });
+
+  // Also render on init in case the drawer was left on the Stuff tab
+  // last time — but we don't persist the active tab, so this is just
+  // a safety net; the panel actually renders on tab-switch anyway.
+  // Kept as a passive warm-up so the first tab click feels instant.
+  renderStuff();
+})();
+
+
+// ══════════════════════════════════════════════════════════════════════
+// Journal — one-line-a-day
+// ─────────────────────────────────────────────────────────────────────
+// A tiny, low-ceremony daily reflection widget: one line per calendar
+// day, autosaved on blur / Enter. Past entries live in a scrollable
+// history list underneath today's input; each past entry is inline-
+// editable (click to edit, blur to save) or deletable on hover.
+//
+// Storage schema (chrome.storage.local key 'journalEntries'):
+//   { "YYYY-MM-DD": { text: string, updatedAt: number } }
+//
+// Included in BACKUP_KEYS so export/import round-trips journal history.
+// Opened via the sidebar-panel Journal button (see #journalToggleBtn in
+// newtab.html) — no keyboard shortcut, to avoid colliding with 'J' as a
+// possible future search hotkey.
+// ══════════════════════════════════════════════════════════════════════
+(function initJournal() {
+  const backdrop  = document.getElementById('journalBackdrop');
+  const dialog    = document.getElementById('journalDialog');
+  const closeBtn  = document.getElementById('journalClose');
+  const toggleBtn = document.getElementById('journalToggleBtn');
+
+  const todayDateEl = document.getElementById('journalTodayDate');
+  const todayInput  = document.getElementById('journalTodayInput');
+  const countEl     = document.getElementById('journalCount');
+  const savedEl     = document.getElementById('journalSaved');
+
+  const historyEl   = document.getElementById('journalHistory');
+  const historyCountEl = document.getElementById('journalHistoryCount');
+
+  if (!backdrop || !toggleBtn) return;
+
+  const MAX_LEN = 160;
+
+  // ── Date helpers ─────────────────────────────────────────────────
+  // Local-time YYYY-MM-DD (not UTC) so "today" matches the user's
+  // calendar day, matching the countdown widget's date parsing.
+  function todayKey() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  function formatFullDate(key) {
+    const [y, m, d] = key.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString(undefined, {
+      weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+    });
+  }
+  function formatShortDate(key) {
+    const [y, m, d] = key.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString(undefined, {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+    });
+  }
+
+  // ── State ────────────────────────────────────────────────────────
+  // In-memory mirror of journalEntries; loaded on first open, and kept
+  // in sync with storage from that point on. Every mutation writes back.
+  let entries = null;
+
+  async function loadEntries() {
+    if (entries) return entries;
+    const raw = await store.get('journalEntries', {});
+    // Defensive: ensure we always get an object even if storage was corrupted.
+    entries = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    return entries;
+  }
+  async function persistEntries() {
+    await store.set('journalEntries', entries);
+  }
+
+  // ── UI: character count ──────────────────────────────────────────
+  function updateCount() {
+    const len = todayInput.value.length;
+    countEl.textContent = `${len} / ${MAX_LEN}`;
+    countEl.classList.toggle('is-near-limit', len >= MAX_LEN - 20 && len < MAX_LEN);
+    countEl.classList.toggle('is-at-limit', len >= MAX_LEN);
+  }
+
+  // ── UI: "saved" indicator ────────────────────────────────────────
+  let savedFlashTimer = null;
+  function flashSaved() {
+    savedEl.textContent = 'Saved';
+    savedEl.classList.add('visible');
+    clearTimeout(savedFlashTimer);
+    savedFlashTimer = setTimeout(() => savedEl.classList.remove('visible'), 1400);
+  }
+
+  // ── Save today's line ────────────────────────────────────────────
+  // Called on blur, Enter, and periodically while typing (debounced).
+  let saveDebounce = null;
+  async function saveToday(immediate) {
+    const key = todayKey();
+    const text = todayInput.value.trim().slice(0, MAX_LEN);
+    await loadEntries();
+
+    if (!text) {
+      // Empty ⇒ removing today's entry entirely, so a day the user
+      // typed into and then wiped doesn't clutter the history list.
+      if (entries[key]) {
+        delete entries[key];
+        await persistEntries();
+        renderHistory();
+      }
+      return;
+    }
+
+    const prior = entries[key];
+    if (prior && prior.text === text) return; // no-op if unchanged
+    entries[key] = { text, updatedAt: Date.now() };
+    await persistEntries();
+    flashSaved();
+    // Only re-render history if it's an update to an existing past entry
+    // OR the very first entry ever — today's entry is intentionally NOT
+    // duplicated in the history list (the top slot IS today).
+    renderHistory();
+  }
+
+  function scheduleSave() {
+    clearTimeout(saveDebounce);
+    saveDebounce = setTimeout(() => saveToday(false), 500);
+  }
+
+  // ── UI: render past entries ──────────────────────────────────────
+  function renderHistory() {
+    const today = todayKey();
+    // Every day EXCEPT today, newest first.
+    const keys = Object.keys(entries)
+      .filter(k => k !== today)
+      .sort((a, b) => (a < b ? 1 : -1)); // string sort works for YYYY-MM-DD
+
+    historyEl.innerHTML = '';
+    for (const key of keys) {
+      historyEl.appendChild(buildEntryRow(key, entries[key]));
+    }
+    historyCountEl.textContent = String(keys.length);
+  }
+
+  function buildEntryRow(key, entry) {
+    const row = document.createElement('div');
+    row.className = 'journal-entry';
+    row.dataset.key = key;
+
+    const date = document.createElement('div');
+    date.className = 'journal-entry-date';
+    date.textContent = formatShortDate(key);
+    row.appendChild(date);
+
+    const text = document.createElement('div');
+    text.className = 'journal-entry-text';
+    text.textContent = entry.text;
+    text.title = 'Click to edit';
+    text.spellcheck = false;
+    // contenteditable is toggled on/off around the edit to keep the
+    // whole row from being a click target for cursor placement.
+    text.addEventListener('click', () => beginEditEntry(row, text, key));
+    row.appendChild(text);
+
+    const del = document.createElement('button');
+    del.className = 'journal-entry-del';
+    del.title = 'Delete this entry';
+    del.setAttribute('aria-label', 'Delete this journal entry');
+    del.innerHTML = '&times;';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete the entry for ${formatFullDate(key)}? This can't be undone.`)) return;
+      delete entries[key];
+      await persistEntries();
+      renderHistory();
+    });
+    row.appendChild(del);
+
+    return row;
+  }
+
+  function beginEditEntry(row, textEl, key) {
+    if (textEl.getAttribute('contenteditable') === 'true') return; // already editing
+    textEl.setAttribute('contenteditable', 'true');
+    textEl.focus();
+    // Place caret at end.
+    const sel = window.getSelection();
+    const rng = document.createRange();
+    rng.selectNodeContents(textEl);
+    rng.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(rng);
+
+    // Save-on-blur/Enter, cancel-on-Escape.
+    function commit() {
+      cleanup();
+      const next = textEl.textContent.trim().slice(0, MAX_LEN);
+      if (!next) {
+        // Empty ⇒ delete the entry entirely (same rule as today).
+        delete entries[key];
+      } else if (!entries[key] || entries[key].text !== next) {
+        entries[key] = { text: next, updatedAt: Date.now() };
+      } else {
+        // No change — nothing to persist, but still re-render so the
+        // row visually settles back to non-edit state.
+        renderHistory();
+        return;
+      }
+      persistEntries().then(renderHistory);
+    }
+    function cancel() {
+      cleanup();
+      textEl.textContent = entries[key] ? entries[key].text : '';
+    }
+    function cleanup() {
+      textEl.removeAttribute('contenteditable');
+      textEl.removeEventListener('blur', commit);
+      textEl.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) {
+      if (e.key === 'Enter') { e.preventDefault(); textEl.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    }
+    textEl.addEventListener('blur', commit);
+    textEl.addEventListener('keydown', onKey);
+  }
+
+  // ── Open / close ─────────────────────────────────────────────────
+  async function open() {
+    await loadEntries();
+
+    const key = todayKey();
+    todayDateEl.textContent = formatFullDate(key);
+    todayInput.value = entries[key] ? entries[key].text : '';
+    updateCount();
+    savedEl.classList.remove('visible');
+    renderHistory();
+
+    backdrop.classList.add('open');
+    // Autofocus but only after the entrance transition — otherwise the
+    // caret jumps in before the dialog has finished sliding into place.
+    setTimeout(() => todayInput.focus(), 90);
+  }
+  function close() {
+    // Flush any pending debounced save so nothing gets dropped on close.
+    if (saveDebounce) {
+      clearTimeout(saveDebounce);
+      saveDebounce = null;
+      saveToday(true);
+    }
+    backdrop.classList.remove('open');
+  }
+
+  toggleBtn.addEventListener('click', open);
+  closeBtn.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  // Escape closes when the dialog itself has focus (matches the other
+  // mini-dialogs' behavior).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && backdrop.classList.contains('open')) close();
+  });
+
+  // ── Input handlers ───────────────────────────────────────────────
+  todayInput.addEventListener('input', () => {
+    // Enforce the same char limit visually (the maxlength attr already
+    // handles input, but we still update the counter live).
+    if (todayInput.value.length > MAX_LEN) {
+      todayInput.value = todayInput.value.slice(0, MAX_LEN);
+    }
+    updateCount();
+    scheduleSave();
+  });
+  todayInput.addEventListener('blur', () => {
+    if (saveDebounce) { clearTimeout(saveDebounce); saveDebounce = null; }
+    saveToday(true);
+  });
+  todayInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      todayInput.blur(); // triggers save above
+    }
+  });
 })();
