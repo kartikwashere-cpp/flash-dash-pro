@@ -500,18 +500,10 @@
          • Same timer state (shares DOM-independent state via script).
          • Time presets pick a focus duration in one click.
          • Space bar pauses/plays (only while this overlay is open).
-         • Collapse button (or Escape) returns to the small floating card.
+         • Escape (or clicking the dimmed backdrop) returns to the
+           small floating card — no dedicated exit button needed.
   ════════════════════════════════════════════════════════════ -->
   <div class="pomodoro-fullscreen" id="pomodoroFullscreen" aria-hidden="true">
-    <button class="pomodoro-fs-collapse" id="pomodoroCollapseBtn" title="Exit fullscreen (Esc)">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M10 4v6H4" />
-        <path d="M14 20v-6h6" />
-        <path d="M4 10l7-7" />
-        <path d="M20 14l-7 7" />
-      </svg>
-    </button>
-
     <div class="pomodoro-fs-inner">
       <div class="pomodoro-fs-mode" id="pomodoroFsMode">Focus Session</div>
 
