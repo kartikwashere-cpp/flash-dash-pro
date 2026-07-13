@@ -949,6 +949,20 @@ function _setText(el, text) {
   if (el.textContent !== text) el.textContent = text;
 }
 
+// Dimension-bracket labels live in a nested <span> (not the bracket div's
+// own textContent) so CSS can style the caliper line and the floating
+// pixel-value pill independently. The span is created once per pooled
+// element and reused across frames, same as the element itself.
+function _setDimLabel(el, text) {
+  let span = el.firstElementChild;
+  if (!span || !span.classList.contains('snap-dim-label')) {
+    span = document.createElement('span');
+    span.className = 'snap-dim-label';
+    el.appendChild(span);
+  }
+  if (span.textContent !== text) span.textContent = text;
+}
+
 function _drawVGuide(key, x, rects, kind) {
   let top = Infinity, bot = -Infinity;
   for (const r of rects) {
@@ -984,13 +998,13 @@ function _drawDimBracket(key, rect, axis) {
     _setStyle(el, 'top',    (rect.bottom + 8) + 'px');
     _setStyle(el, 'width',  (rect.right - rect.left) + 'px');
     _setStyle(el, 'height', '');
-    _setText(el, Math.round(rect.right - rect.left) + ' px');
+    _setDimLabel(el, Math.round(rect.right - rect.left) + ' px');
   } else {
     _setStyle(el, 'left',   (rect.right + 8) + 'px');
     _setStyle(el, 'top',    rect.top + 'px');
     _setStyle(el, 'height', (rect.bottom - rect.top) + 'px');
     _setStyle(el, 'width',  '');
-    _setText(el, Math.round(rect.bottom - rect.top) + ' px');
+    _setDimLabel(el, Math.round(rect.bottom - rect.top) + ' px');
   }
 }
 
